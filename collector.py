@@ -97,6 +97,87 @@ def get_tao_price_usd() -> float | None:
 
 # ── Metagraph Snapshot ────────────────────────────────────────────────────────
 
+def snapshot_from_metagraph(mg, date_str: str, tao_usd: float | None = None) -> dict:
+    """
+    Build a daily_log row from an already-synced Metagraph (live tip or historical block).
+    `date_str` is the logical calendar day (YYYY-MM-DD) for entitlement + display.
+    """
+    uids = mg.uids.tolist()
+    emissions = mg.emission.tolist()
+    dividends = mg.dividends.tolist()
+    incentives = mg.incentive.tolist()
+    stakes = mg.stake.tolist()
+    hotkeys = mg.hotkeys
+    hparams = mg.hparams
+    pool = mg.pool
+
+    total_emission = float(sum(emissions))
+    owner_share = round(total_emission * OWNER_SHARE_PCT, 8)
+
+    try:
+        tao_in = float(pool.tao_in)
+        alpha_in = float(pool.alpha_in)
+        alpha_price_tao = tao_in / alpha_in if alpha_in > 0 else None
+    except Exception:
+        tao_in = alpha_in = alpha_price_tao = None
+
+    if tao_usd is None:
+        tao_usd = get_tao_price_usd()
+
+    alpha_price_usd = (
+        round(alpha_price_tao * tao_usd, 6) if alpha_price_tao and tao_usd else None
+    )
+
+    ent_rate = entitlement_rate_for_snapshot_date(date_str)
+    our_entitled = round(owner_share * ent_rate, 8)
+    our_usd = (
+        round(our_entitled * alpha_price_tao * tao_usd, 2)
+        if (alpha_price_tao and tao_usd)
+        else None
+    )
+    owner_usd = (
+        round(owner_share * alpha_price_tao * tao_usd, 2)
+        if (alpha_price_tao and tao_usd)
+        else None
+    )
+
+    subnet = {
+        "total_alpha_emission": round(total_emission, 8),
+        "owner_share_alpha": owner_share,
+        "miner_validator_alpha": round(total_emission * 0.82, 8),
+        "alpha_price_tao": round(alpha_price_tao, 8) if alpha_price_tao else None,
+        "alpha_price_usd": alpha_price_usd,
+        "tao_price_usd": tao_usd,
+        "tao_in_pool": round(tao_in, 4) if tao_in else None,
+        "alpha_in_pool": round(alpha_in, 4) if alpha_in else None,
+        "tempo": int(hparams.tempo) if hasattr(hparams, "tempo") else None,
+        "entitlement_rate": ent_rate,
+        "our_entitled_alpha": our_entitled,
+        "our_entitled_usd_est": our_usd,
+        "owner_pool_usd_est": owner_usd,
+    }
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    return {
+        "date": date_str,
+        "timestamp": stamp,
+        "block": int(mg.block),
+        "subnet": subnet,
+        "active_uids": [
+            {
+                "uid": uid,
+                "hotkey": str(hotkeys[i])[:16] + "...",
+                "emission": round(float(emissions[i]), 8),
+                "dividend": round(float(dividends[i]), 6),
+                "incentive": round(float(incentives[i]), 6),
+                "stake": round(float(stakes[i]), 4),
+            }
+            for i, uid in enumerate(uids)
+            if float(emissions[i]) > 0
+        ],
+    }
+
+
 def get_snapshot() -> dict:
     """Pull live SN21 metagraph data and return structured snapshot."""
     _configure_chain_ssl()
@@ -104,66 +185,8 @@ def get_snapshot() -> dict:
 
     logger.info("Syncing SN21 metagraph...")
     mg = bt.Metagraph(netuid=NETUID, network=NETWORK, sync=True)
-
-    uids       = mg.uids.tolist()
-    emissions  = mg.emission.tolist()
-    dividends  = mg.dividends.tolist()
-    incentives = mg.incentive.tolist()
-    stakes     = mg.stake.tolist()
-    hotkeys    = mg.hotkeys
-    hparams    = mg.hparams
-    pool       = mg.pool
-
-    total_emission = sum(emissions)
-    owner_share    = round(total_emission * OWNER_SHARE_PCT, 8)
-
-    try:
-        tao_in    = float(pool.tao_in)
-        alpha_in  = float(pool.alpha_in)
-        alpha_price_tao = tao_in / alpha_in if alpha_in > 0 else None
-    except Exception:
-        tao_in = alpha_in = alpha_price_tao = None
-
-    tao_usd = get_tao_price_usd()
-
-    alpha_price_usd = (
-        round(alpha_price_tao * tao_usd, 6)
-        if alpha_price_tao and tao_usd else None
-    )
-
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    ent_rate = entitlement_rate_for_snapshot_date(date_str)
-    subnet = {
-        "total_alpha_emission":  round(total_emission, 8),
-        "owner_share_alpha":     owner_share,
-        "miner_validator_alpha": round(total_emission * 0.82, 8),
-        "alpha_price_tao":       round(alpha_price_tao, 8) if alpha_price_tao else None,
-        "alpha_price_usd":       alpha_price_usd,
-        "tao_price_usd":         tao_usd,
-        "tao_in_pool":           round(tao_in, 4) if tao_in else None,
-        "alpha_in_pool":         round(alpha_in, 4) if alpha_in else None,
-        "tempo":                 int(hparams.tempo) if hasattr(hparams, "tempo") else None,
-        "entitlement_rate":      ent_rate,
-        "our_entitled_alpha":    round(owner_share * ent_rate, 8),
-    }
-
-    return {
-        "date":      date_str,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "block":     int(mg.block),
-        "subnet":    subnet,
-        "active_uids": [
-            {
-                "uid":       uid,
-                "hotkey":    str(hotkeys[i])[:16] + "...",
-                "emission":  round(emissions[i], 8),
-                "dividend":  round(dividends[i], 6),
-                "incentive": round(incentives[i], 6),
-                "stake":     round(stakes[i], 4),
-            }
-            for i, uid in enumerate(uids) if emissions[i] > 0
-        ],
-    }
+    return snapshot_from_metagraph(mg, date_str, tao_usd=None)
 
 
 # ── Persistence Logic ─────────────────────────────────────────────────────────
@@ -186,6 +209,14 @@ def enrich_daily_log_entry(entry: dict) -> bool:
         return False
     rate = entitlement_rate_for_snapshot_date(ds)
     our = round(owner * rate, 8)
+    ap = sub.get("alpha_price_tao")
+    tp = sub.get("tao_price_usd")
+    sub["our_entitled_usd_est"] = (
+        round(our * ap * tp, 2) if (ap is not None and tp is not None) else sub.get("our_entitled_usd_est")
+    )
+    sub["owner_pool_usd_est"] = (
+        round(owner * ap * tp, 2) if (ap is not None and tp is not None) else sub.get("owner_pool_usd_est")
+    )
     changed = sub.get("entitlement_rate") != rate or sub.get("our_entitled_alpha") != our
     sub["entitlement_rate"] = rate
     sub["our_entitled_alpha"] = our
@@ -215,6 +246,7 @@ def migrate_and_rebuild_from_logs() -> None:
     entries_out: list[dict] = []
     run_full = 0.0
     run_our = 0.0
+    run_usd = 0.0
 
     for e in log:
         ds = e["date"]
@@ -229,9 +261,15 @@ def migrate_and_rebuild_from_logs() -> None:
         run_full = round(run_full + owner, 8)
         run_our = round(run_our + our, 8)
         our_tao_est = round(our * alpha_price, 6) if alpha_price else None
-        our_usd_est = (
-            round(our * alpha_price * tao_price, 4) if (alpha_price and tao_price) else None
-        )
+        our_usd_est = sub.get("our_entitled_usd_est")
+        if our_usd_est is None:
+            our_usd_est = (
+                round(our * alpha_price * tao_price, 2) if (alpha_price and tao_price) else None
+            )
+        if our_usd_est is not None:
+            run_usd = round(run_usd + float(our_usd_est), 2)
+        else:
+            run_usd = round(run_usd, 2)
         entries_out.append(
             {
                 "date": ds,
@@ -250,6 +288,7 @@ def migrate_and_rebuild_from_logs() -> None:
                 "our_entitled_usd_est": our_usd_est,
                 "running_total_alpha": run_full,
                 "running_total_our_alpha": run_our,
+                "running_total_our_usd": run_usd,
             }
         )
 
@@ -258,6 +297,7 @@ def migrate_and_rebuild_from_logs() -> None:
         {
             "total_accumulated_alpha": run_full,
             "total_accumulated_our_alpha": run_our,
+            "total_accumulated_our_usd": run_usd,
             "entries": entries_out,
         },
     )

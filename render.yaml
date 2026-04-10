@@ -10,6 +10,9 @@ services:
       # Use 3.11.x so bittensor/bt-decode install from wheels (3.14 triggers Rust/maturin + read-only FS)
       - key: PYTHON_VERSION
         value: "3.11.11"
+      # Needed for /api/backfill & backfill_chain.py (historical blocks); finney tip uses default in collector
+      - key: SUBTENSOR_ARCHIVE_NETWORK
+        value: "archive"
     disk:
       name: sn21-data
       mountPath: /data

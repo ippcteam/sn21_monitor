@@ -7,7 +7,8 @@ import json
 import logging
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+import threading
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
@@ -23,6 +24,9 @@ from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_backfill_lock = threading.Lock()
+_backfill_running = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
@@ -143,6 +147,9 @@ async def api_summary(_=Depends(require_auth)):
             "tao_price_usd":         s.get("tao_price_usd"),
             "running_total_alpha":   ledger.get("total_accumulated_alpha", 0.0),
             "running_total_our_alpha": ledger.get("total_accumulated_our_alpha", 0.0),
+            "our_entitled_usd_est":  s.get("our_entitled_usd_est"),
+            "owner_pool_usd_est":    s.get("owner_pool_usd_est"),
+            "running_total_our_usd": ledger.get("total_accumulated_our_usd"),
             "tier":                  next_tier_info(),
             "ownership_start_date":  OWNERSHIP_START.isoformat(),
             "emission_change_pct":   pct_change(
@@ -212,6 +219,45 @@ async def api_uids(_=Depends(require_auth)):
     if not log:
         return []
     return log[-1].get("active_uids", [])
+
+
+def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
+    global _backfill_running
+    try:
+        from backfill_chain import run_chain_backfill
+
+        run_chain_backfill(date.fromisoformat(start_iso), date.fromisoformat(end_iso))
+    except Exception:
+        logger.exception("Chain backfill failed")
+    finally:
+        with _backfill_lock:
+            _backfill_running = False
+
+
+@app.post("/api/backfill")
+async def api_backfill(
+    start: str | None = None,
+    end: str | None = None,
+    _=Depends(require_auth),
+):
+    """
+    One-time / occasional chain backfill (archive subtensor + CoinGecko TAO history).
+    Set SUBTENSOR_ARCHIVE_NETWORK=archive when your default node cannot serve old blocks.
+    """
+    global _backfill_running
+    with _backfill_lock:
+        if _backfill_running:
+            raise HTTPException(status_code=409, detail="Backfill already running")
+        _backfill_running = True
+    s = start or OWNERSHIP_START.isoformat()
+    e = end or date.today().isoformat()
+    threading.Thread(
+        target=_backfill_thread_worker,
+        args=(s, e),
+        daemon=True,
+        name="sn21-backfill",
+    ).start()
+    return {"queued": True, "start": s, "end": e}
 
 
 @app.post("/api/collect")

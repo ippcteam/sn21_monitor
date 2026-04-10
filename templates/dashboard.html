@@ -497,6 +497,15 @@ function fmt(n, decimals = 4) {
   return parseFloat(n).toFixed(decimals);
 }
 
+function fmtUsd(n) {
+  if (n === null || n === undefined || n === '') return '';
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n));
+  } catch {
+    return '';
+  }
+}
+
 function fmtDelta(pct) {
   if (pct === null || pct === undefined) return '';
   const abs = Math.abs(pct).toFixed(1);
@@ -530,7 +539,8 @@ async function loadSummary() {
       value: fmt(d.owner_share_alpha, 6),
       unit: 'ξ',
       delta: fmtDelta(d.emission_change_pct),
-      sub: 'Subnet total: ' + fmt(d.total_alpha_emission, 6) + ' ξ · ' + d.active_uids + ' UIDs',
+      sub: 'Subnet total: ' + fmt(d.total_alpha_emission, 6) + ' ξ · ' + d.active_uids + ' UIDs'
+        + (d.owner_pool_usd_est != null ? ' · ' + fmtUsd(d.owner_pool_usd_est) + ' (α→τ→USD)' : ''),
       accent: '#EF4444',
     },
     {
@@ -538,7 +548,8 @@ async function loadSummary() {
       value: fmt(d.our_entitled_alpha, 6),
       unit: 'ξ',
       delta: fmtDelta(d.our_entitled_change_pct),
-      sub: pctEnt ? pctEnt + '% of owner pool today' : 'Tier-based share of owner pool',
+      sub: (pctEnt ? pctEnt + '% of owner pool · ' : '')
+        + (d.our_entitled_usd_est != null ? fmtUsd(d.our_entitled_usd_est) + ' (α→τ→USD)' : 'Tier × owner pool'),
       accent: '#10b981',
     },
     {
@@ -554,7 +565,8 @@ async function loadSummary() {
       value: fmt(d.running_total_our_alpha, 4),
       unit: 'ξ',
       delta: '',
-      sub: 'Cumulative · owner pool total ' + fmt(d.running_total_alpha, 4) + ' ξ',
+      sub: 'Cumulative ξ · pool total ' + fmt(d.running_total_alpha, 4) + ' ξ'
+        + (d.running_total_our_usd != null ? ' · ' + fmtUsd(d.running_total_our_usd) + ' (sum of daily USD est.)' : ''),
       accent: '#F59E0B',
     },
     {
