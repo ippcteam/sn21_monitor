@@ -15,8 +15,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
+from collector import migrate_and_rebuild_from_logs
 from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
+from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -109,7 +112,10 @@ async def dashboard(request: Request, _=Depends(require_auth)):
 async def api_summary(_=Depends(require_auth)):
     """Latest snapshot + ledger totals for dashboard cards."""
     log    = load_json(DAILY_LOG, [])
-    ledger = load_json(OWNER_LEDGER, {"total_accumulated_alpha": 0.0, "entries": []})
+    ledger = load_json(
+        OWNER_LEDGER,
+        {"total_accumulated_alpha": 0.0, "total_accumulated_our_alpha": 0.0, "entries": []},
+    )
 
     latest = log[-1] if log else None
     prev   = log[-2] if len(log) >= 2 else None
@@ -122,16 +128,23 @@ async def api_summary(_=Depends(require_auth)):
     if latest:
         s = latest["subnet"]
         prev_s = prev["subnet"] if prev else {}
+        our_today = s.get("our_entitled_alpha")
+        our_prev = prev_s.get("our_entitled_alpha") if prev_s else None
         return {
             "date":                  latest["date"],
             "block":                 latest["block"],
             "active_uids":           len(latest["active_uids"]),
             "total_alpha_emission":  s["total_alpha_emission"],
             "owner_share_alpha":     s["owner_share_alpha"],
+            "our_entitled_alpha":    our_today,
+            "entitlement_rate":      s.get("entitlement_rate"),
             "alpha_price_tao":       s.get("alpha_price_tao"),
             "alpha_price_usd":       s.get("alpha_price_usd"),
             "tao_price_usd":         s.get("tao_price_usd"),
-            "running_total_alpha":   ledger["total_accumulated_alpha"],
+            "running_total_alpha":   ledger.get("total_accumulated_alpha", 0.0),
+            "running_total_our_alpha": ledger.get("total_accumulated_our_alpha", 0.0),
+            "tier":                  next_tier_info(),
+            "ownership_start_date":  OWNERSHIP_START.isoformat(),
             "emission_change_pct":   pct_change(
                 s["total_alpha_emission"],
                 prev_s.get("total_alpha_emission")
@@ -143,6 +156,10 @@ async def api_summary(_=Depends(require_auth)):
             "tao_price_change_pct":  pct_change(
                 s.get("tao_price_usd") or 0,
                 prev_s.get("tao_price_usd") or 0
+            ),
+            "our_entitled_change_pct": pct_change(
+                our_today or 0,
+                our_prev,
             ),
         }
     return {"error": "No data yet"}
@@ -163,6 +180,7 @@ async def api_history(_=Depends(require_auth), days: int = 30):
                 "date":       e["date"],
                 "total":      e["subnet"]["total_alpha_emission"],
                 "owner":      e["subnet"]["owner_share_alpha"],
+                "our":        e["subnet"].get("our_entitled_alpha"),
             }
             for e in recent_log
         ],
@@ -176,9 +194,11 @@ async def api_history(_=Depends(require_auth), days: int = 30):
         ],
         "accumulation_series": [
             {
-                "date":    e["date"],
-                "running": e["running_total_alpha"],
-                "daily":   e["owner_share_alpha"],
+                "date":              e["date"],
+                "running":           e.get("running_total_our_alpha"),
+                "running_owner":     e.get("running_total_alpha"),
+                "daily":             e.get("our_entitled_alpha"),
+                "daily_owner":       e.get("owner_share_alpha"),
             }
             for e in recent_ledger
         ],
@@ -216,6 +236,10 @@ def scheduled_collection():
         logger.error(f"Scheduled collection failed: {e}")
 
 
+def log_tier_boundary(message: str) -> None:
+    logger.info("SN21 entitlement tier boundary — %s", message)
+
+
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(
     scheduled_collection,
@@ -227,8 +251,27 @@ scheduler.add_job(
 
 @app.on_event("startup")
 async def startup():
+    try:
+        migrate_and_rebuild_from_logs()
+    except Exception:
+        logger.exception("migrate_and_rebuild_from_logs on startup")
+
+    now = datetime.now(timezone.utc)
+    for run_at, msg in scheduled_tier_events():
+        if run_at > now:
+            scheduler.add_job(
+                log_tier_boundary,
+                DateTrigger(run_date=run_at),
+                args=[msg],
+                id=f"tier_boundary_{run_at.date().isoformat()}",
+                replace_existing=True,
+            )
+
     scheduler.start()
-    logger.info("Data dir: %s — scheduler started (daily collection 08:00 UTC)", DATA_DIR)
+    logger.info(
+        "Data dir: %s — schedulers on (daily collect 08:00 UTC; tier boundaries scheduled)",
+        DATA_DIR,
+    )
 
 
 @app.on_event("shutdown")

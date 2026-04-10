@@ -12,6 +12,7 @@ from pathlib import Path
 import requests
 
 from config import DAILY_LOG, OWNER_LEDGER
+from ownership import entitlement_rate_for_snapshot_date
 
 logger = logging.getLogger(__name__)
 
@@ -54,18 +55,43 @@ def save_json(path: Path, data):
 
 # ── External Prices ──────────────────────────────────────────────────────────
 
+_HTTP_HEADERS = {
+    "User-Agent": "SN21-Monitor/1.0 (+https://github.com/ippcteam/sn21_monitor)",
+    "Accept": "application/json",
+}
+
+
 def get_tao_price_usd() -> float | None:
-    """Fetch TAO/USD from CoinGecko free API."""
+    """
+    TAO/USD — CoinGecko often fails from datacenters without a real User-Agent;
+    Binance TAO/USDT is used as fallback (≈ USD).
+    """
+    for cid in ("bittensor", "tensor"):
+        try:
+            r = requests.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": cid, "vs_currencies": "usd"},
+                headers=_HTTP_HEADERS,
+                timeout=15,
+            )
+            r.raise_for_status()
+            v = r.json().get(cid, {}).get("usd")
+            if v is not None:
+                return float(v)
+        except Exception as e:
+            logger.warning("CoinGecko TAO id=%s: %s", cid, e)
+
     try:
         r = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": "bittensor", "vs_currencies": "usd"},
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "TAOUSDT"},
+            headers=_HTTP_HEADERS,
             timeout=10,
         )
         r.raise_for_status()
-        return r.json().get("bittensor", {}).get("usd")
+        return float(r.json()["price"])
     except Exception as e:
-        logger.warning(f"TAO price fetch failed: {e}")
+        logger.warning("Binance TAO/USDT fallback failed: %s", e)
         return None
 
 
@@ -105,21 +131,27 @@ def get_snapshot() -> dict:
         if alpha_price_tao and tao_usd else None
     )
 
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ent_rate = entitlement_rate_for_snapshot_date(date_str)
+    subnet = {
+        "total_alpha_emission":  round(total_emission, 8),
+        "owner_share_alpha":     owner_share,
+        "miner_validator_alpha": round(total_emission * 0.82, 8),
+        "alpha_price_tao":       round(alpha_price_tao, 8) if alpha_price_tao else None,
+        "alpha_price_usd":       alpha_price_usd,
+        "tao_price_usd":         tao_usd,
+        "tao_in_pool":           round(tao_in, 4) if tao_in else None,
+        "alpha_in_pool":         round(alpha_in, 4) if alpha_in else None,
+        "tempo":                 int(hparams.tempo) if hasattr(hparams, "tempo") else None,
+        "entitlement_rate":      ent_rate,
+        "our_entitled_alpha":    round(owner_share * ent_rate, 8),
+    }
+
     return {
-        "date":      datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "date":      date_str,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "block":     int(mg.block),
-        "subnet": {
-            "total_alpha_emission":  round(total_emission, 8),
-            "owner_share_alpha":     owner_share,
-            "miner_validator_alpha": round(total_emission * 0.82, 8),
-            "alpha_price_tao":       round(alpha_price_tao, 8) if alpha_price_tao else None,
-            "alpha_price_usd":       alpha_price_usd,
-            "tao_price_usd":         tao_usd,
-            "tao_in_pool":           round(tao_in, 4) if tao_in else None,
-            "alpha_in_pool":         round(alpha_in, 4) if alpha_in else None,
-            "tempo":                 int(hparams.tempo) if hasattr(hparams, "tempo") else None,
-        },
+        "subnet":    subnet,
         "active_uids": [
             {
                 "uid":       uid,
@@ -144,33 +176,91 @@ def append_daily_log(snapshot: dict) -> list:
     return log
 
 
-def update_owner_ledger(snapshot: dict) -> dict:
-    ledger = load_json(OWNER_LEDGER, {"total_accumulated_alpha": 0.0, "entries": []})
+def enrich_daily_log_entry(entry: dict) -> bool:
+    """Ensure subnet has entitlement fields from date + owner_share_alpha. Returns True if changed."""
+    ds = entry.get("date", "")[:10]
+    sub = entry.get("subnet") or {}
+    try:
+        owner = float(sub["owner_share_alpha"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    rate = entitlement_rate_for_snapshot_date(ds)
+    our = round(owner * rate, 8)
+    changed = sub.get("entitlement_rate") != rate or sub.get("our_entitled_alpha") != our
+    sub["entitlement_rate"] = rate
+    sub["our_entitled_alpha"] = our
+    entry["subnet"] = sub
+    return changed
 
-    today_share = snapshot["subnet"]["owner_share_alpha"]
-    alpha_price = snapshot["subnet"].get("alpha_price_tao")
-    tao_price   = snapshot["subnet"].get("tao_price_usd")
 
-    # Remove existing entry for today if re-running
-    ledger["entries"] = [e for e in ledger["entries"] if e["date"] != snapshot["date"]]
+def migrate_and_rebuild_from_logs() -> None:
+    """
+    Backfill entitlement on every row in daily_log from ownership schedule (from Feb 19),
+    then rebuild owner_ledger cumulative totals from the log.
+    Safe to call on every startup.
+    """
+    log = load_json(DAILY_LOG, [])
+    if not log:
+        return
 
-    # Recompute running total from all entries after dedup
-    ledger["total_accumulated_alpha"] = round(
-        sum(e["owner_share_alpha"] for e in ledger["entries"]) + today_share, 8
+    changed = False
+    for e in log:
+        if enrich_daily_log_entry(e):
+            changed = True
+    if changed:
+        log.sort(key=lambda x: x["date"])
+        save_json(DAILY_LOG, log)
+
+    log = sorted(load_json(DAILY_LOG, []), key=lambda x: x["date"])
+    entries_out: list[dict] = []
+    run_full = 0.0
+    run_our = 0.0
+
+    for e in log:
+        ds = e["date"]
+        sub = e.get("subnet") or {}
+        enrich_daily_log_entry(e)
+        sub = e["subnet"]
+        owner = float(sub["owner_share_alpha"])
+        our = float(sub["our_entitled_alpha"])
+        rate = float(sub["entitlement_rate"])
+        alpha_price = sub.get("alpha_price_tao")
+        tao_price = sub.get("tao_price_usd")
+        run_full = round(run_full + owner, 8)
+        run_our = round(run_our + our, 8)
+        our_tao_est = round(our * alpha_price, 6) if alpha_price else None
+        our_usd_est = (
+            round(our * alpha_price * tao_price, 4) if (alpha_price and tao_price) else None
+        )
+        entries_out.append(
+            {
+                "date": ds,
+                "owner_share_alpha": owner,
+                "entitlement_rate": rate,
+                "our_entitled_alpha": our,
+                "alpha_price_tao": alpha_price,
+                "tao_price_usd": tao_price,
+                "owner_share_tao_est": round(owner * alpha_price, 6) if alpha_price else None,
+                "owner_share_usd_est": (
+                    round(owner * alpha_price * tao_price, 4)
+                    if (alpha_price and tao_price)
+                    else None
+                ),
+                "our_entitled_tao_est": our_tao_est,
+                "our_entitled_usd_est": our_usd_est,
+                "running_total_alpha": run_full,
+                "running_total_our_alpha": run_our,
+            }
+        )
+
+    save_json(
+        OWNER_LEDGER,
+        {
+            "total_accumulated_alpha": run_full,
+            "total_accumulated_our_alpha": run_our,
+            "entries": entries_out,
+        },
     )
-
-    ledger["entries"].append({
-        "date":                  snapshot["date"],
-        "owner_share_alpha":     today_share,
-        "alpha_price_tao":       alpha_price,
-        "tao_price_usd":         tao_price,
-        "owner_share_tao_est":   round(today_share * alpha_price, 6)  if alpha_price else None,
-        "owner_share_usd_est":   round(today_share * alpha_price * tao_price, 4) if (alpha_price and tao_price) else None,
-        "running_total_alpha":   ledger["total_accumulated_alpha"],
-    })
-
-    save_json(OWNER_LEDGER, ledger)
-    return ledger
 
 
 def check_emission_drop(snapshot: dict, log: list) -> dict | None:
@@ -205,15 +295,17 @@ def check_emission_drop(snapshot: dict, log: list) -> dict | None:
 def run_collection() -> dict:
     logger.info("Starting daily SN21 collection...")
     snapshot = get_snapshot()
-    log      = append_daily_log(snapshot)
-    ledger   = update_owner_ledger(snapshot)
-    alert    = check_emission_drop(snapshot, log)
+    log = append_daily_log(snapshot)
+    migrate_and_rebuild_from_logs()
+    ledger = load_json(OWNER_LEDGER, {"entries": []})
+    alert = check_emission_drop(snapshot, log)
 
     logger.info(
-        f"Collection complete. "
-        f"Emission: {snapshot['subnet']['total_alpha_emission']:.6f} ξ | "
-        f"Owner: {snapshot['subnet']['owner_share_alpha']:.6f} ξ | "
-        f"Alert: {alert}"
+        "Collection complete. Emission: %.6f ξ | Owner pool: %.6f ξ | Our share: %.6f ξ | Alert: %s",
+        snapshot["subnet"]["total_alpha_emission"],
+        snapshot["subnet"]["owner_share_alpha"],
+        snapshot["subnet"].get("our_entitled_alpha") or 0,
+        alert,
     )
 
     return {"snapshot": snapshot, "ledger": ledger, "alert": alert}

@@ -138,12 +138,12 @@
     /* ── Cards ── */
     .cards-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 1rem;
       margin-bottom: 2rem;
     }
 
-    @media (max-width: 900px) { .cards-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 1100px) { .cards-grid { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 500px) { .cards-grid { grid-template-columns: 1fr; } }
 
     .card {
@@ -388,7 +388,7 @@
   <div class="alert-banner" id="alertBanner"></div>
 
   <!-- ── Metric Cards ── -->
-  <div class="section-label">Live Metrics</div>
+  <div class="section-label">Live Metrics <span id="ownershipHint" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
   <div class="cards-grid" id="cardsGrid">
     <div class="loading"><div class="spinner"></div> Loading…</div>
   </div>
@@ -400,7 +400,7 @@
     <!-- Accumulation — full width -->
     <div class="chart-card full">
       <div class="chart-header">
-        <span class="chart-title">Owner Alpha Accumulation</span>
+        <span class="chart-title">Cumulative Alpha · Our Share vs Owner Pool</span>
         <span class="chart-meta" id="accMeta">—</span>
       </div>
       <div class="chart-canvas-wrap">
@@ -434,7 +434,7 @@
     <div class="chart-card full">
       <div class="chart-header">
         <span class="chart-title">Daily Alpha Emission</span>
-        <span class="chart-meta">Total vs Owner Share</span>
+        <span class="chart-meta">Total · Owner pool · Our entitled</span>
       </div>
       <div class="chart-canvas-wrap">
         <canvas id="chartEmission"></canvas>
@@ -516,22 +516,45 @@ async function loadSummary() {
   }
 
   document.getElementById('lastUpdate').textContent = d.date + ' · block ' + d.block.toLocaleString();
+  const oh = document.getElementById('ownershipHint');
+  if (oh && d.ownership_start_date) {
+    oh.textContent = ' · schedule from ' + d.ownership_start_date;
+  }
+
+  const t = d.tier || {};
+  const pctEnt = d.entitlement_rate != null ? (d.entitlement_rate * 100).toFixed(0) : null;
 
   const cards = [
     {
-      label: 'Owner Share Today',
+      label: 'Owner pool (subnet 18%)',
       value: fmt(d.owner_share_alpha, 6),
       unit: 'ξ',
       delta: fmtDelta(d.emission_change_pct),
-      sub: 'Total emitted: ' + fmt(d.total_alpha_emission, 6) + ' ξ',
+      sub: 'Subnet total: ' + fmt(d.total_alpha_emission, 6) + ' ξ · ' + d.active_uids + ' UIDs',
       accent: '#EF4444',
     },
     {
-      label: 'Running Accumulation',
-      value: fmt(d.running_total_alpha, 4),
+      label: 'Our entitled share',
+      value: fmt(d.our_entitled_alpha, 6),
+      unit: 'ξ',
+      delta: fmtDelta(d.our_entitled_change_pct),
+      sub: pctEnt ? pctEnt + '% of owner pool today' : 'Tier-based share of owner pool',
+      accent: '#10b981',
+    },
+    {
+      label: 'Entitlement tier',
+      value: t.label || '—',
+      unit: '',
+      delta: '',
+      sub: t.note || '—',
+      accent: '#6366f1',
+    },
+    {
+      label: 'Our running total',
+      value: fmt(d.running_total_our_alpha, 4),
       unit: 'ξ',
       delta: '',
-      sub: d.active_uids + ' active UIDs',
+      sub: 'Cumulative · owner pool total ' + fmt(d.running_total_alpha, 4) + ' ξ',
       accent: '#F59E0B',
     },
     {
@@ -544,10 +567,10 @@ async function loadSummary() {
     },
     {
       label: 'TAO Price',
-      value: d.tao_price_usd ? '$' + fmt(d.tao_price_usd, 2) : '—',
+      value: d.tao_price_usd != null && d.tao_price_usd !== '' ? '$' + fmt(d.tao_price_usd, 2) : '—',
       unit: '',
       delta: fmtDelta(d.tao_price_change_pct),
-      sub: 'via CoinGecko',
+      sub: 'CoinGecko or Binance fallback',
       accent: '#8B5CF6',
     },
   ];
@@ -644,25 +667,55 @@ function buildCharts(history) {
   const priceData = history.price_series || [];
   const emData = history.emission_series || [];
 
-  // Accumulation chart
+  // Accumulation chart (our cumulative vs full owner pool)
   if (accData.length) {
-    const total = accData[accData.length - 1]?.running || 0;
-    buildLineChart(
-      'chartAccumulation',
-      accData.map(d => d.date),
-      [{
-        data: accData.map(d => d.running),
-        borderColor: '#F59E0B',
-        backgroundColor: 'rgba(245,158,11,0.05)',
-        borderWidth: 2,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 3,
-        pointBackgroundColor: '#F59E0B',
-      }],
-      'accMeta',
-      'Running total: ' + parseFloat(total).toFixed(4) + ' ξ'
-    );
+    const ctx = document.getElementById('chartAccumulation').getContext('2d');
+    if (charts['chartAccumulation']) charts['chartAccumulation'].destroy();
+    const labels = accData.map(d => d.date);
+    const ourRun = accData.map(d => d.running);
+    const ownerRun = accData.map(d => (d.running_owner != null ? d.running_owner : d.running));
+    const lastOur = ourRun[ourRun.length - 1] || 0;
+    charts['chartAccumulation'] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Our entitlement (cum.)',
+            data: ourRun,
+            borderColor: '#F59E0B',
+            backgroundColor: 'rgba(245,158,11,0.06)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: '#F59E0B',
+          },
+          {
+            label: 'Owner pool (cum.)',
+            data: ownerRun,
+            borderColor: '#64748b',
+            backgroundColor: 'rgba(100,116,139,0.04)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0.3,
+            pointRadius: 2,
+            pointBackgroundColor: '#64748b',
+          },
+        ],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        plugins: {
+          ...CHART_DEFAULTS.plugins,
+          legend: {
+            display: true,
+            labels: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 }, boxWidth: 10 },
+          },
+        },
+      },
+    });
+    document.getElementById('accMeta').textContent = 'Our cumulative: ' + parseFloat(lastOur).toFixed(4) + ' ξ';
   }
 
   // Alpha price chart
@@ -709,7 +762,7 @@ function buildCharts(history) {
     );
   }
 
-  // Emission chart (dual: total + owner)
+  // Emission chart (total + owner pool + our entitled)
   if (emData.length) {
     const ctx = document.getElementById('chartEmission').getContext('2d');
     if (charts['chartEmission']) charts['chartEmission'].destroy();
@@ -719,7 +772,7 @@ function buildCharts(history) {
         labels: emData.map(d => d.date),
         datasets: [
           {
-            label: 'Total',
+            label: 'Total α',
             data: emData.map(d => d.total),
             backgroundColor: 'rgba(37,99,235,0.25)',
             borderColor: '#2563EB',
@@ -727,10 +780,18 @@ function buildCharts(history) {
             borderRadius: 2,
           },
           {
-            label: 'Owner (18%)',
+            label: 'Owner pool',
             data: emData.map(d => d.owner),
-            backgroundColor: 'rgba(239,68,68,0.4)',
+            backgroundColor: 'rgba(239,68,68,0.35)',
             borderColor: '#EF4444',
+            borderWidth: 1,
+            borderRadius: 2,
+          },
+          {
+            label: 'Our entitled',
+            data: emData.map(d => (d.our != null ? d.our : 0)),
+            backgroundColor: 'rgba(16,185,129,0.45)',
+            borderColor: '#10b981',
             borderWidth: 1,
             borderRadius: 2,
           },
