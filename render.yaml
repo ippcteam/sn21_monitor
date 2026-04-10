@@ -7,8 +7,9 @@ services:
     envVars:
       - key: DASHBOARD_PASSWORD
         sync: false          # Set this manually in Render dashboard — never commit it
+      # Use 3.11.x so bittensor/bt-decode install from wheels (3.14 triggers Rust/maturin + read-only FS)
       - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: "3.11.11"
     disk:
       name: sn21-data
       mountPath: /data
