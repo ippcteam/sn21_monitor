@@ -10,13 +10,12 @@ from pathlib import Path
 
 import requests
 
+from config import DAILY_LOG, OWNER_LEDGER
+
 logger = logging.getLogger(__name__)
 
 NETUID          = 21
 NETWORK         = "finney"
-DATA_DIR        = Path("/data")
-DAILY_LOG       = DATA_DIR / "daily_log.json"
-OWNER_LEDGER    = DATA_DIR / "owner_ledger.json"
 OWNER_SHARE_PCT = 0.18
 DROP_THRESHOLD  = 0.10  # 10% drop triggers alert flag
 

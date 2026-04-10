@@ -16,6 +16,8 @@ from fastapi.templating import Jinja2Templates
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -23,9 +25,6 @@ logger = logging.getLogger(__name__)
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
 COOKIE_NAME        = "sn21_session"
 COOKIE_MAX_AGE     = 60 * 60 * 24 * 30  # 30 days
-DATA_DIR           = Path(os.environ.get("SN21_DATA_DIR", "/data"))
-DAILY_LOG          = DATA_DIR / "daily_log.json"
-OWNER_LEDGER       = DATA_DIR / "owner_ledger.json"
 
 # Active sessions (in-memory — reset on restart, which is fine)
 active_sessions: set[str] = set()
@@ -228,9 +227,8 @@ scheduler.add_job(
 
 @app.on_event("startup")
 async def startup():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     scheduler.start()
-    logger.info("Scheduler started — daily collection at 08:00 UTC")
+    logger.info("Data dir: %s — scheduler started (daily collection 08:00 UTC)", DATA_DIR)
 
 
 @app.on_event("shutdown")
