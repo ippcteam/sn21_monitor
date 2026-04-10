@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SN21 · HOPE Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #111827;
+      --surface:  #1a2235;
+      --border:   #1f2d42;
+      --red:      #EF4444;
+      --blue:     #2563EB;
+      --amber:    #F59E0B;
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Rajdhani', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-image:
+        radial-gradient(ellipse at 20% 50%, rgba(37,99,235,0.06) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 50%, rgba(239,68,68,0.04) 0%, transparent 60%);
+    }
+
+    .login-wrap {
+      width: 100%;
+      max-width: 380px;
+      padding: 2rem;
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    .logo-mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .logo-mark .dot {
+      width: 8px; height: 8px;
+      background: var(--red);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+
+    .logo h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      color: var(--text);
+    }
+
+    .logo p {
+      font-size: 0.75rem;
+      letter-spacing: 0.2em;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--red), var(--blue));
+    }
+
+    label {
+      display: block;
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    input[type="password"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      padding: 0.75rem 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="password"]:focus {
+      border-color: var(--blue);
+    }
+
+    .error-msg {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--red);
+      margin-top: 0.5rem;
+      display: {% if error %}block{% else %}none{% endif %};
+    }
+
+    button {
+      width: 100%;
+      margin-top: 1.5rem;
+      padding: 0.85rem;
+      background: var(--blue);
+      border: none;
+      border-radius: 4px;
+      color: white;
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    button:hover { background: #1d4ed8; }
+    button:active { transform: scale(0.99); }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="logo">
+      <div class="logo-mark">
+        <div class="dot"></div>
+        <h1>SN21</h1>
+      </div>
+      <p>HOPE · AdTAO · Bittensor</p>
+    </div>
+    <div class="card">
+      <form method="POST" action="/login">
+        <label for="password">Access Key</label>
+        <input type="password" id="password" name="password" autofocus autocomplete="current-password">
+        <p class="error-msg">Invalid access key</p>
+        <button type="submit">Enter Dashboard</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>
