@@ -202,7 +202,7 @@ async def manual_collect(_=Depends(require_auth)):
         result = run_collection()
         return {"status": "ok", "date": result["snapshot"]["date"]}
     except Exception as e:
-        logger.error(f"Manual collection failed: {e}")
+        logger.exception("Manual collection failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 

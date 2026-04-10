@@ -1,8 +1,9 @@
-# bittensor 8.5.x requires fastapi~=0.110.1
+# bittensor 8.5.x pins fastapi~=0.110; use 9.x for current finney runtime decode compatibility
 fastapi==0.110.3
 uvicorn[standard]==0.30.6
 jinja2==3.1.4
 python-multipart==0.0.12
 apscheduler==3.10.4
-bittensor==8.5.1
+bittensor==9.12.2
 requests==2.32.3
+certifi>=2024.0.0

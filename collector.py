@@ -5,6 +5,7 @@ Pulls Bittensor metagraph data + TAO/Alpha prices and writes to disk.
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,17 @@ NETUID          = 21
 NETWORK         = "finney"
 OWNER_SHARE_PCT = 0.18
 DROP_THRESHOLD  = 0.10  # 10% drop triggers alert flag
+
+
+def _configure_chain_ssl() -> None:
+    """Point SSL at certifi so WebSocket chain connections verify on minimal images (e.g. Render)."""
+    try:
+        import certifi
+
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+    except ImportError:
+        pass
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -61,6 +73,7 @@ def get_tao_price_usd() -> float | None:
 
 def get_snapshot() -> dict:
     """Pull live SN21 metagraph data and return structured snapshot."""
+    _configure_chain_ssl()
     import bittensor as bt
 
     logger.info("Syncing SN21 metagraph...")
@@ -110,7 +123,7 @@ def get_snapshot() -> dict:
         "active_uids": [
             {
                 "uid":       uid,
-                "hotkey":    hotkeys[i][:16] + "...",
+                "hotkey":    str(hotkeys[i])[:16] + "...",
                 "emission":  round(emissions[i], 8),
                 "dividend":  round(dividends[i], 6),
                 "incentive": round(incentives[i], 6),

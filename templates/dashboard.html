@@ -760,18 +760,32 @@ async function triggerCollect() {
   btn.textContent = 'Collecting…';
   btn.disabled = true;
   try {
-    const r = await fetch('/api/collect', { method: 'POST' });
-    const d = await r.json();
+    const r = await fetch('/api/collect', { method: 'POST', credentials: 'same-origin' });
+    let d = {};
+    try {
+      d = await r.json();
+    } catch (_) {
+      /* non-JSON body */
+    }
+    if (!r.ok) {
+      const msg = d.detail || `Collect failed (${r.status})`;
+      btn.textContent = 'Collect Now';
+      btn.disabled = false;
+      alert(msg);
+      return;
+    }
     if (d.status === 'ok') {
       btn.textContent = 'Done ✓';
       setTimeout(() => { btn.textContent = 'Collect Now'; btn.disabled = false; init(); }, 1500);
     } else {
-      btn.textContent = 'Error';
+      btn.textContent = 'Collect Now';
       btn.disabled = false;
+      alert(d.detail || 'Unexpected response');
     }
-  } catch {
-    btn.textContent = 'Error';
+  } catch (e) {
+    btn.textContent = 'Collect Now';
     btn.disabled = false;
+    alert(e instanceof Error ? e.message : 'Network error');
   }
 }
 
