@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
 COOKIE_NAME        = "sn21_session"
 COOKIE_MAX_AGE     = 60 * 60 * 24 * 30  # 30 days
-DATA_DIR           = Path("/data")
+DATA_DIR           = Path(os.environ.get("SN21_DATA_DIR", "/data"))
 DAILY_LOG          = DATA_DIR / "daily_log.json"
 OWNER_LEDGER       = DATA_DIR / "owner_ledger.json"
 
