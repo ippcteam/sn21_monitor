@@ -2,9 +2,17 @@
 Shared paths for JSON logs. Prefer /data (Render disk); fall back to ./data if /data is not writable.
 """
 
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 import logging
 import os
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
