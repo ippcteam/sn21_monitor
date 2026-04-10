@@ -134,6 +134,7 @@ def run_chain_backfill(
 
     def notify(msg: str) -> None:
         logger.info(msg)
+        print(msg, flush=True)
         if progress:
             progress(msg)
 
@@ -147,36 +148,59 @@ def run_chain_backfill(
     added = 0
     updated = 0
     cur = start
-    while cur <= end:
-        ds = cur.isoformat()
-        blk = block_at_or_before_eod_utc(st, cur)
-        tao_usd = tao_by_day.get(ds) or get_tao_price_usd()
-        mg = bt.Metagraph(
-            netuid=NETUID,
-            network=net,
-            lite=True,
-            sync=False,
-            subtensor=st,
-        )
-        mg.sync(block=blk, lite=True, subtensor=st)
-        snap = snapshot_from_metagraph(mg, ds, tao_usd=tao_usd)
-        line = f"{ds} block={blk} owner_α={snap['subnet']['owner_share_alpha']}"
-        notify(line)
+    max_attempts = int(os.environ.get("BACKFILL_RETRIES_PER_DAY", "5"))
 
-        log_data = load_json(DAILY_LOG, [])
-        idx = next((i for i, e in enumerate(log_data) if e.get("date") == ds), None)
-        if idx is not None:
-            log_data[idx] = snap
-            updated += 1
-        else:
-            log_data.append(snap)
-            added += 1
-        log_data.sort(key=lambda e: e["date"])
-        save_json(DAILY_LOG, log_data)
-        cur += timedelta(days=1)
-        time.sleep(sleep_s)
+    def fresh_subtensor():
+        nonlocal st
+        st = bt.Subtensor(network=net, log_verbose=False)
 
-    migrate_and_rebuild_from_logs()
+    try:
+        while cur <= end:
+            ds = cur.isoformat()
+            tao_usd = tao_by_day.get(ds) or get_tao_price_usd()
+            last_err: Exception | None = None
+            for attempt in range(max_attempts):
+                try:
+                    if attempt > 0:
+                        notify(f"{ds} retry {attempt + 1}/{max_attempts} (reconnecting…)")
+                        time.sleep(min(8 * attempt, 45))
+                        fresh_subtensor()
+                    blk = block_at_or_before_eod_utc(st, cur)
+                    mg = bt.Metagraph(
+                        netuid=NETUID,
+                        network=net,
+                        lite=True,
+                        sync=False,
+                        subtensor=st,
+                    )
+                    mg.sync(block=blk, lite=True, subtensor=st)
+                    snap = snapshot_from_metagraph(mg, ds, tao_usd=tao_usd)
+                    line = f"{ds} block={blk} owner_α={snap['subnet']['owner_share_alpha']}"
+                    notify(line)
+
+                    log_data = load_json(DAILY_LOG, [])
+                    idx = next((i for i, e in enumerate(log_data) if e.get("date") == ds), None)
+                    if idx is not None:
+                        log_data[idx] = snap
+                        updated += 1
+                    else:
+                        log_data.append(snap)
+                        added += 1
+                    log_data.sort(key=lambda e: e["date"])
+                    save_json(DAILY_LOG, log_data)
+                    break
+                except Exception as e:
+                    last_err = e
+                    logger.warning("Backfill day %s attempt %s failed: %s", ds, attempt + 1, e)
+            else:
+                raise RuntimeError(f"Giving up on {ds} after {max_attempts} attempts") from last_err
+
+            cur += timedelta(days=1)
+            time.sleep(sleep_s)
+    finally:
+        notify("Rebuilding ledger from daily_log…")
+        migrate_and_rebuild_from_logs()
+
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
