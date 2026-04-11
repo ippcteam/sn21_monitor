@@ -11,14 +11,14 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, File, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from collector import migrate_and_rebuild_from_logs
+from collector import migrate_and_rebuild_from_logs, save_json
 from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
 from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
 
@@ -51,6 +51,18 @@ def require_auth(request: Request):
     if not token or token not in active_sessions:
         raise HTTPException(status_code=302, headers={"Location": "/login"})
     return token
+
+
+def require_import_key(request: Request) -> None:
+    """Same secret as dashboard login; use header so curl works without cookies."""
+    key = (request.headers.get("X-SN21-Key") or "").strip()
+    auth = request.headers.get("Authorization") or ""
+    if auth.startswith("Bearer "):
+        key = auth[7:].strip()
+    if not key:
+        raise HTTPException(status_code=401, detail="Missing X-SN21-Key or Authorization: Bearer")
+    if len(key) != len(DASHBOARD_PASSWORD) or not secrets.compare_digest(key, DASHBOARD_PASSWORD):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -270,6 +282,57 @@ async def manual_collect(_=Depends(require_auth)):
     except Exception as e:
         logger.exception("Manual collection failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/import-data")
+async def api_import_data(
+    request: Request,
+    daily_log: UploadFile | None = File(None),
+    owner_ledger: UploadFile | None = File(None),
+):
+    """
+    Push JSON snapshots onto the server data disk (e.g. after local backfill).
+    Auth: header X-SN21-Key: <DASHBOARD_PASSWORD> or Authorization: Bearer <password>
+
+    curl example:
+      curl -X POST "https://YOUR_APP.onrender.com/api/import-data" \\
+        -H "X-SN21-Key: $DASHBOARD_PASSWORD" \\
+        -F "daily_log=@data/daily_log.json" \\
+        -F "owner_ledger=@data/owner_ledger.json"
+    """
+    require_import_key(request)
+    if daily_log is None and owner_ledger is None:
+        raise HTTPException(status_code=400, detail="Provide daily_log and/or owner_ledger file fields")
+
+    if daily_log is not None:
+        raw = await daily_log.read()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="daily_log is not valid JSON")
+        if not isinstance(data, list):
+            raise HTTPException(status_code=400, detail="daily_log must be a JSON array")
+        save_json(DAILY_LOG, data)
+        migrate_and_rebuild_from_logs()
+
+    if owner_ledger is not None:
+        raw = await owner_ledger.read()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="owner_ledger is not valid JSON")
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="owner_ledger must be a JSON object")
+        save_json(OWNER_LEDGER, data)
+
+    return {
+        "status": "ok",
+        "wrote": {
+            "daily_log": daily_log is not None,
+            "owner_ledger": owner_ledger is not None,
+        },
+        "data_dir": str(DATA_DIR),
+    }
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
