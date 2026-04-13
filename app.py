@@ -21,6 +21,7 @@ from apscheduler.triggers.date import DateTrigger
 from collector import migrate_and_rebuild_from_logs, save_json
 from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
 from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
+from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -233,6 +234,31 @@ async def api_uids(_=Depends(require_auth)):
     return log[-1].get("active_uids", [])
 
 
+@app.get("/api/taostats")
+async def api_taostats(_=Depends(require_auth), transfers_limit: int = 100):
+    """
+    Last Taostats sync snapshot (TAO transfers for owner SS58). Full list on disk;
+    response truncates `transfers` for browser use — see `transfer_count`.
+    """
+    raw = load_json(TAOSTATS_STORE, {})
+    transfers = raw.get("transfers") or []
+    out = {k: v for k, v in raw.items() if k != "transfers"}
+    out["transfers"] = transfers[: max(0, min(transfers_limit, 500))]
+    out["transfers_returned"] = len(out["transfers"])
+    out["transfers_truncated"] = len(transfers) > len(out["transfers"])
+    return out
+
+
+@app.post("/api/taostats/sync")
+async def api_taostats_sync(_=Depends(require_auth)):
+    """Run Taostats fetch immediately (same job as daily schedule)."""
+    try:
+        return sync_owner_transfers()
+    except Exception as e:
+        logger.exception("Taostats sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -345,6 +371,13 @@ def scheduled_collection():
         logger.error(f"Scheduled collection failed: {e}")
 
 
+def scheduled_taostats_sync():
+    try:
+        sync_owner_transfers()
+    except Exception:
+        logger.exception("Scheduled Taostats sync failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -354,6 +387,12 @@ scheduler.add_job(
     scheduled_collection,
     CronTrigger(hour=8, minute=0),
     id="daily_collection",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_taostats_sync,
+    CronTrigger(hour=8, minute=15),
+    id="daily_taostats",
     replace_existing=True,
 )
 
@@ -378,7 +417,7 @@ async def startup():
 
     scheduler.start()
     logger.info(
-        "Data dir: %s — schedulers on (daily collect 08:00 UTC; tier boundaries scheduled)",
+        "Data dir: %s — schedulers on (collect 08:00 UTC; Taostats 08:15 UTC; tier boundaries)",
         DATA_DIR,
     )
 
