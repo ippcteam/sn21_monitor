@@ -7,7 +7,7 @@ Light Finney nodes discard state after ~300 blocks; use network=archive
 TAO/USD per day: CoinGecko `market_chart/range` (one HTTP call) with forward-fill.
 
 CLI:
-  python -m backfill_chain --start 2026-02-19 --end 2026-04-10
+  python -m backfill_chain --start 2026-03-20 --end 2026-04-10
 
 Or authenticated POST /api/backfill (runs as a background task).
 """

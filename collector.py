@@ -226,7 +226,7 @@ def enrich_daily_log_entry(entry: dict) -> bool:
 
 def migrate_and_rebuild_from_logs() -> None:
     """
-    Backfill entitlement on every row in daily_log from ownership schedule (from Feb 19),
+    Backfill entitlement on every row in daily_log from ownership schedule (OWNERSHIP_START_DATE),
     then rebuild owner_ledger cumulative totals from the log.
     Safe to call on every startup.
     """

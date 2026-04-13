@@ -15,7 +15,7 @@ from dateutil.relativedelta import relativedelta
 
 
 def _parse_start() -> date:
-    raw = os.environ.get("OWNERSHIP_START_DATE", "2026-02-19").strip()
+    raw = os.environ.get("OWNERSHIP_START_DATE", "2026-03-20").strip()
     return date.fromisoformat(raw)
 
 
