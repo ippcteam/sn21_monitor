@@ -158,6 +158,17 @@ async def api_summary(_=Depends(require_auth)):
             if (balance_total_tao is not None and balance_24h_tao)
             else None
         )
+        tao_usd_for_summary = s.get("tao_price_usd") or live_tao_usd
+        balance_total_usd = (
+            round(balance_total_tao * tao_usd_for_summary, 2)
+            if (balance_total_tao is not None and tao_usd_for_summary)
+            else None
+        )
+        balance_24h_usd = (
+            round(balance_24h_tao * tao_usd_for_summary, 2)
+            if (balance_24h_tao is not None and tao_usd_for_summary)
+            else None
+        )
 
         return {
             "date":                  latest["date"],
@@ -196,7 +207,9 @@ async def api_summary(_=Depends(require_auth)):
             "wallet": {
                 "address":           wallet.get("address"),
                 "balance_total_tao": balance_total_tao,
+                "balance_total_usd": balance_total_usd,
                 "balance_24h_ago_tao": balance_24h_tao,
+                "balance_24h_ago_usd": balance_24h_usd,
                 "balance_change_24h_pct": wallet_pct,
                 "block_number":      wallet.get("block_number"),
                 "timestamp":         wallet.get("timestamp"),

@@ -89,6 +89,41 @@
 
     .topbar-right { display: flex; align-items: center; gap: 1.5rem; }
 
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      flex: 1;
+      justify-content: center;
+    }
+    .tab-btn {
+      font-family: var(--display);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.4rem 0.9rem;
+      border-radius: 3px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); border-color: var(--border); }
+    .tab-btn.active {
+      color: var(--text);
+      border-color: var(--blue);
+      background: rgba(37,99,235,0.08);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    @media (max-width: 800px) {
+      .tabs { gap: 0; }
+      .tab-btn { font-size: 0.65rem; padding: 0.35rem 0.5rem; letter-spacing: 0.06em; }
+    }
+
     .last-update {
       font-family: var(--mono);
       font-size: 0.65rem;
@@ -375,6 +410,12 @@
     <span class="brand">SN<span>21</span></span>
     <span class="netuid-badge">NETUID · 21 · FINNEY</span>
   </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="home">Home</button>
+    <button class="tab-btn" data-tab="activity">Activity</button>
+    <button class="tab-btn" data-tab="neurons">Neurons</button>
+    <button class="tab-btn" data-tab="movement">Movement</button>
+  </nav>
   <div class="topbar-right">
     <span class="last-update" id="lastUpdate">—</span>
     <button class="btn-sm primary" onclick="triggerCollect()">Collect Now</button>
@@ -386,6 +427,9 @@
 
   <!-- Alert banner -->
   <div class="alert-banner" id="alertBanner"></div>
+
+  <!-- ───────────── HOME TAB ───────────── -->
+  <section class="tab-panel active" data-panel="home">
 
   <!-- ── Metric Cards ── -->
   <div class="section-label">Live Metrics <span id="ownershipHint" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
@@ -456,6 +500,71 @@
   <div class="table-card" id="uidTable">
     <div class="loading"><div class="spinner"></div> Loading…</div>
   </div>
+
+  </section><!-- /home -->
+
+  <!-- ───────────── ACTIVITY TAB ───────────── -->
+  <section class="tab-panel" data-panel="activity">
+    <div class="section-label">Subnet Activity (24h) <span id="activityMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="cards-grid" id="activityCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+    <div class="section-label">Trend · Last 30 Days</div>
+    <div class="charts-grid" id="activityCharts" style="display:none">
+      <div class="chart-card full">
+        <div class="chart-header">
+          <span class="chart-title">Alpha Holders</span>
+          <span class="chart-meta" id="holdersMeta">—</span>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="chartHolders"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header">
+          <span class="chart-title">Daily Volume (α)</span>
+          <span class="chart-meta">Buy · Sell</span>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="chartVolume"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header">
+          <span class="chart-title">Net Flow (τ)</span>
+          <span class="chart-meta" id="netFlowMeta">—</span>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="chartNetFlow"></canvas></div>
+      </div>
+    </div>
+  </section><!-- /activity -->
+
+  <!-- ───────────── NEURONS TAB ───────────── -->
+  <section class="tab-panel" data-panel="neurons">
+    <div class="section-label">Subnet Header <span id="neuronsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="cards-grid" id="neuronsHeader">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Validators · Validation Window <span id="valWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="table-card" id="validatorsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Miners · Mining Window <span id="minerWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="table-card" id="minersTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </section><!-- /neurons -->
+
+  <!-- ───────────── MOVEMENT TAB ───────────── -->
+  <section class="tab-panel" data-panel="movement">
+    <div class="section-label">Our Owner Pool · Position</div>
+    <div class="cards-grid" id="ourMovementCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Top Movers (24h) <span id="moversMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="table-card" id="moversTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </section><!-- /movement -->
 
 </main>
 
@@ -575,10 +684,10 @@ async function loadSummary() {
       unit: 'τ',
       delta: fmtDelta(d.wallet?.balance_change_24h_pct),
       sub: d.wallet?.balance_total_tao != null
-        ? (d.tao_price_usd != null
-            ? fmtUsd(d.wallet.balance_total_tao * d.tao_price_usd) + ' · '
-            : '')
-          + 'block ' + (d.wallet.block_number ? d.wallet.block_number.toLocaleString() : '—')
+        ? (d.wallet?.balance_total_usd != null
+            ? '≈ ' + fmtUsd(d.wallet.balance_total_usd) + ' (τ × $' + fmt(d.tao_price_usd, 2) + ')'
+            : 'TAO price unavailable')
+          + ' · block ' + (d.wallet.block_number ? d.wallet.block_number.toLocaleString() : '—')
           + ' · ' + (d.wallet.alpha_balances?.length || 0) + ' subnet position(s)'
         : 'Run Taostats sync to populate',
       accent: '#10b981',
@@ -882,6 +991,37 @@ async function init() {
   const history = await loadHistory();
   buildCharts(history);
   await loadUids();
+}
+
+/* ── Tab switching ─────────────────────────────────────────────── */
+const _tabLoaded = { home: true, activity: false, neurons: false, movement: false };
+const _tabLoaders = {
+  activity: async () => { /* Feature 2 — wired in later commit */ },
+  neurons:  async () => { /* Features 4+5 — wired in later commit */ },
+  movement: async () => { /* Feature 3 — wired in later commit */ },
+};
+
+function activateTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.dataset.panel === name);
+  });
+  if (!_tabLoaded[name] && _tabLoaders[name]) {
+    _tabLoaded[name] = true;
+    _tabLoaders[name]().catch(e => console.error('tab load failed', name, e));
+  }
+  try { history.replaceState(null, '', '#' + name); } catch (_) {}
+}
+
+document.querySelectorAll('.tab-btn').forEach(b => {
+  b.addEventListener('click', () => activateTab(b.dataset.tab));
+});
+
+const initialTab = (location.hash || '').replace('#', '');
+if (initialTab && ['home','activity','neurons','movement'].includes(initialTab)) {
+  activateTab(initialTab);
 }
 
 init();
