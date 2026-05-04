@@ -32,7 +32,8 @@ NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 200
 SNAPSHOT_RETENTION = 7
-INTER_PAGE_SLEEP = 0.25  # Be nice to Taostats — 10 pages × 250 ms = 2.5 s
+INTER_PAGE_SLEEP = 0.6   # Taostats throttles bursts; 10 pages × 600 ms = 6 s
+MAX_429_RETRIES = 5
 
 HOLDERS_STORE = DATA_DIR / "holders_snapshots.json"
 
@@ -60,11 +61,20 @@ def _to_int(v: Any) -> int:
 
 
 def _fetch_page(session: requests.Session, page: int) -> dict[str, Any]:
-    r = session.get(
-        f"{TAOSTATS_API_BASE}{STAKE_BALANCE_LATEST_PATH}",
-        params={"netuid": NETUID, "limit": PAGE_SIZE, "page": page, "order": "balance_desc"},
-        timeout=120,
-    )
+    """One paginated read of stake_balance/latest with 429 backoff."""
+    url = f"{TAOSTATS_API_BASE}{STAKE_BALANCE_LATEST_PATH}"
+    params = {"netuid": NETUID, "limit": PAGE_SIZE, "page": page, "order": "balance_desc"}
+    for attempt in range(MAX_429_RETRIES):
+        r = session.get(url, params=params, timeout=120)
+        if r.status_code == 429:
+            wait = min(2 ** attempt + 0.5, 30)
+            logger.warning("Holders sync 429 on page %s; retry %ss (attempt %s/%s)",
+                           page, wait, attempt + 1, MAX_429_RETRIES)
+            _time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r = session.get(url, params=params, timeout=120)
     r.raise_for_status()
     return r.json()
 
