@@ -364,6 +364,17 @@ async def api_subnet_sync_now(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/neurons")
+async def api_neurons(_=Depends(require_auth)):
+    """All 256 SN21 UIDs split into validators / miners with window-aware submitting flag."""
+    try:
+        from neurons_sync import fetch_neurons
+        return fetch_neurons()
+    except Exception as e:
+        logger.exception("Neurons fetch failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:

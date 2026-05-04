@@ -997,7 +997,7 @@ async function init() {
 const _tabLoaded = { home: true, activity: false, neurons: false, movement: false };
 const _tabLoaders = {
   activity: () => loadActivityTab(),
-  neurons:  async () => { /* Features 4+5 — wired in later commit */ },
+  neurons:  () => loadNeuronsTab(),
   movement: async () => { /* Feature 3 — wired in later commit */ },
 };
 
@@ -1163,6 +1163,178 @@ function buildActivityCharts(history) {
   const lastNet = netFlow[netFlow.length - 1];
   document.getElementById('netFlowMeta').textContent =
     lastNet != null ? 'Latest: ' + Number(lastNet).toFixed(2) + ' τ' : '—';
+}
+
+/* ── Neurons tab loader ─────────────────────────────────────── */
+function fmtPct(n, decimals = 1) {
+  if (n === null || n === undefined) return '—';
+  return parseFloat(n).toFixed(decimals);
+}
+
+function fmtBlocksAgo(blocks) {
+  if (blocks === null || blocks === undefined) return '—';
+  const seconds = blocks * 12;
+  if (seconds < 60) return blocks + ' blk';
+  if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
+  return Math.round(seconds / 86400) + 'd ago';
+}
+
+function submittingBadge(flag, relevant) {
+  if (flag == null) return '<span style="color:var(--muted)">—</span>';
+  if (!relevant) return '<span style="color:var(--muted)">off-window</span>';
+  return flag
+    ? '<span style="color:var(--green)">● submitting</span>'
+    : '<span style="color:var(--red)">○ idle</span>';
+}
+
+async function loadNeuronsTab() {
+  const headerEl = document.getElementById('neuronsHeader');
+  const valEl = document.getElementById('validatorsTable');
+  const minerEl = document.getElementById('minersTable');
+  try {
+    const r = await fetch('/api/neurons');
+    const d = await r.json();
+    if (d.error || !d.totals) {
+      headerEl.innerHTML = `<div class="no-data"><strong>${d.error || d.detail || 'No data'}</strong></div>`;
+      valEl.innerHTML = '';
+      minerEl.innerHTML = '';
+      return;
+    }
+
+    document.getElementById('neuronsMeta').textContent =
+      ' · block ' + Number(d.block_number).toLocaleString() + ' · refresh 60s';
+
+    const w = d.window || {};
+    const fmtETrange = (s, e) => {
+      const fmt = (iso) => {
+        try { return new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }); }
+        catch { return iso; }
+      };
+      return fmt(s) + ' → ' + fmt(e);
+    };
+    document.getElementById('valWindowMeta').textContent =
+      ' · ' + (w.current_kind === 'validation' ? 'ACTIVE' : 'next window') + ' · ' + fmtETrange(w.start_et, w.end_et) + ' ET';
+    document.getElementById('minerWindowMeta').textContent =
+      ' · ' + (w.current_kind === 'mining' ? 'ACTIVE' : 'next window') + ' · ' + fmtETrange(w.start_et, w.end_et) + ' ET';
+
+    // Subnet header cards
+    const sub = d.submitting_in_window || {};
+    const t = d.totals || {};
+    const headerCards = [
+      {
+        label: 'Window · ' + (w.current_kind || '—').toUpperCase(),
+        value: w.current_kind === 'validation'
+          ? `${sub.validators || 0} / ${t.validators || 0}`
+          : `${sub.miners || 0} / ${t.miners || 0}`,
+        unit: 'submitting',
+        delta: '',
+        sub: 'Active validators ' + (t.active_validators ?? 0) + ' · active miners ' + (t.active_miners ?? 0),
+        accent: w.current_kind === 'validation' ? '#10b981' : '#F59E0B',
+      },
+      {
+        label: 'Validators with permit',
+        value: fmtInt(t.validators),
+        unit: '',
+        delta: '',
+        sub: 'Submitting in window: ' + fmtInt(sub.validators),
+        accent: '#2563EB',
+      },
+      {
+        label: 'Miner UIDs',
+        value: fmtInt(t.miners),
+        unit: '',
+        delta: '',
+        sub: 'Submitting in window: ' + fmtInt(sub.miners) + ' · burn 100% (gross = burned)',
+        accent: '#EF4444',
+      },
+    ];
+    headerEl.innerHTML = headerCards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+        <div class="card-sub">${c.sub}</div>
+      </div>
+    `).join('');
+
+    // Validators table
+    valEl.innerHTML = renderValidatorsTable(d.validators || [], w);
+    minerEl.innerHTML = renderMinersTable(d.miners || [], w);
+  } catch (e) {
+    headerEl.innerHTML = `<div class="no-data"><strong>Failed to load neurons</strong><span>${e}</span></div>`;
+  }
+}
+
+function renderValidatorsTable(rows, w) {
+  if (!rows.length) return '<div class="no-data"><span>No validators</span></div>';
+  const relevant = w.current_kind === 'validation';
+  return `
+    <div class="table-header">
+      <span class="table-title">Validators</span>
+      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${rows.length} with permit</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>UID</th><th>Stake α</th><th>Daily validating α</th><th>Daily reward τ</th>
+          <th>Dividends</th><th>Updated</th><th>Submitting</th><th>Hotkey</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(v => `
+            <tr>
+              <td class="uid">${v.uid}${v.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}</td>
+              <td class="mono">${fmtAlpha(v.total_alpha_stake, 2)}</td>
+              <td class="em">${fmtAlpha(v.daily_validating_alpha, 4)}</td>
+              <td class="mono">${fmtAlpha(v.daily_reward_tao, 4)}</td>
+              <td class="mono">${fmtPct((v.dividends || 0) * 100, 2)}%</td>
+              <td class="mono" title="block ${v.last_update_block}">${fmtBlocksAgo(v.updated_blocks_ago)}</td>
+              <td class="mono">${submittingBadge(v.submitting_in_window, relevant)}</td>
+              <td class="mono" style="color:var(--muted)">${v.hotkey_short || ''}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderMinersTable(rows, w) {
+  if (!rows.length) return '<div class="no-data"><span>No miners</span></div>';
+  const relevant = w.current_kind === 'mining';
+  // Show only UIDs with non-zero incentive OR an axon serving (active miners), keep top 50 by incentive
+  const filtered = rows.filter(m => (m.incentive || 0) > 0 || m.axon_ip || m.is_owner_hotkey).slice(0, 60);
+  return `
+    <div class="table-header">
+      <span class="table-title">Miners</span>
+      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${filtered.length} shown / ${rows.length} total</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>UID</th><th>Incentive</th>
+          <th>Mining α (gross)</th><th>Burned α</th><th>Net α</th>
+          <th>Updated</th><th>Submitting</th><th>Axon</th><th>Hotkey</th>
+        </tr></thead>
+        <tbody>
+          ${filtered.map(m => {
+            const gross = m.daily_mining_alpha || 0;
+            const burn = m.daily_burned_alpha || 0;
+            const net = gross - burn;
+            return `<tr>
+              <td class="uid">${m.uid}${m.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${m.is_immunity_period ? ' <span style="color:var(--blue-lt);font-size:0.6rem">IMM</span>' : ''}</td>
+              <td class="em">${fmtPct((m.incentive || 0) * 100, 4)}%</td>
+              <td class="mono">${fmtAlpha(gross, 4)}</td>
+              <td class="mono" style="color:var(--red)">${fmtAlpha(burn, 4)}</td>
+              <td class="mono">${fmtAlpha(net, 4)}</td>
+              <td class="mono" title="block ${m.last_update_block}">${fmtBlocksAgo(m.updated_blocks_ago)}</td>
+              <td class="mono">${submittingBadge(m.submitting_in_window, relevant)}</td>
+              <td class="mono" style="color:var(--muted)">${m.axon_ip ? m.axon_ip + ':' + m.axon_port : '—'}</td>
+              <td class="mono" style="color:var(--muted)">${m.hotkey_short || ''}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 async function triggerSubnetSync() {
