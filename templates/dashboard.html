@@ -998,7 +998,7 @@ const _tabLoaded = { home: true, activity: false, neurons: false, movement: fals
 const _tabLoaders = {
   activity: () => loadActivityTab(),
   neurons:  () => loadNeuronsTab(),
-  movement: async () => { /* Feature 3 — wired in later commit */ },
+  movement: () => loadMovementTab(),
 };
 
 /* ── Activity tab loader ─────────────────────────────────────── */
@@ -1343,6 +1343,125 @@ async function triggerSubnetSync() {
     if (!r.ok) { alert('Subnet sync failed (' + r.status + ')'); return; }
     _tabLoaded.activity = false;
     activateTab('activity');
+  } catch (e) { alert(e); }
+}
+
+/* ── Movement tab loader ────────────────────────────────────── */
+async function loadMovementTab() {
+  const ourEl = document.getElementById('ourMovementCards');
+  const moversEl = document.getElementById('moversTable');
+  try {
+    const [moveRes, ourRes] = await Promise.all([
+      fetch('/api/holders/movement?limit=50'),
+      fetch('/api/holders/our'),
+    ]);
+    const move = await moveRes.json();
+    const our = await ourRes.json();
+
+    if (move.error || our.error) {
+      ourEl.innerHTML = `<div class="no-data">
+        <strong>${move.error || our.error}</strong>
+        <span>Holder snapshots populate from the daily 08:45 UTC job. <button class="btn-sm" onclick="triggerHoldersSync()">Sync now (~10s)</button></span>
+      </div>`;
+      moversEl.innerHTML = '';
+      return;
+    }
+
+    // Our position cards
+    const latest = our.latest || {};
+    const ourCards = [
+      {
+        label: 'Our SN21 alpha',
+        value: fmtAlpha(latest.alpha, 4),
+        unit: 'ξ',
+        delta: '',
+        sub: `≈ ${fmtAlpha(latest.alpha_as_tao, 4)} τ · ${latest.positions || 0} hotkey position(s)`,
+        accent: '#10b981',
+      },
+      {
+        label: '24h change (alpha)',
+        value: our.delta_24h_alpha != null ? (our.delta_24h_alpha >= 0 ? '+' : '') + fmtAlpha(our.delta_24h_alpha, 4) : '—',
+        unit: 'ξ',
+        delta: '',
+        sub: our.delta_24h_alpha_as_tao != null
+          ? `≈ ${our.delta_24h_alpha_as_tao >= 0 ? '+' : ''}${fmtAlpha(our.delta_24h_alpha_as_tao, 4)} τ`
+          : 'Need ≥ 2 daily snapshots',
+        accent: (our.delta_24h_alpha || 0) >= 0 ? '#2563EB' : '#EF4444',
+      },
+      {
+        label: 'Snapshots stored',
+        value: fmtInt((our.snapshots || []).length),
+        unit: '',
+        delta: '',
+        sub: 'Coldkey ' + (our.coldkey || '').slice(0, 10) + '…',
+        accent: '#6366f1',
+      },
+    ];
+    ourEl.innerHTML = ourCards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+        <div class="card-sub">${c.sub}</div>
+      </div>
+    `).join('');
+
+    // Top movers
+    document.getElementById('moversMeta').textContent =
+      ' · ' + (move.today_date || '—') + ' vs ' + (move.prior_date || 'first snapshot') +
+      ' · holders ' + (move.today_holder_count || '—') + ' (was ' + (move.prior_holder_count ?? '—') +
+      ', new ' + (move.new_positions || 0) + ', exited ' + (move.exited_positions || 0) + ')';
+
+    if (!move.movers?.length) {
+      moversEl.innerHTML = '<div class="no-data"><span>Need a second snapshot tomorrow to compute movement</span></div>';
+      return;
+    }
+    moversEl.innerHTML = `
+      <div class="table-header">
+        <span class="table-title">Top movers</span>
+        <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
+          inflows ${fmtAlpha(move.inflows_alpha, 2)} ξ · outflows ${fmtAlpha(move.outflows_alpha, 2)} ξ
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Hotkey</th><th>Coldkey</th><th>α today</th><th>α yesterday</th>
+            <th>Δ α</th><th>Δ τ-equiv</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            ${move.movers.map(m => {
+              const dirColor = m.alpha_delta > 0 ? 'var(--green)' : (m.alpha_delta < 0 ? 'var(--red)' : 'var(--muted)');
+              const status = m.is_new ? '<span style="color:var(--blue-lt)">NEW</span>'
+                : m.is_exited ? '<span style="color:var(--red)">EXITED</span>'
+                : (m.alpha_delta > 0 ? '<span style="color:var(--green)">BOUGHT</span>'
+                   : '<span style="color:var(--red)">SOLD</span>');
+              return `<tr>
+                <td class="mono" style="color:var(--text-dim)" title="${m.hotkey || ''}">${m.hotkey_name || (m.hotkey || '').slice(0,12) + '…'}</td>
+                <td class="mono" style="color:var(--muted)" title="${m.coldkey || ''}">${(m.coldkey || '').slice(0,10)}…</td>
+                <td class="mono">${fmtAlpha(m.alpha_now, 4)}</td>
+                <td class="mono" style="color:var(--muted)">${fmtAlpha(m.alpha_prev, 4)}</td>
+                <td class="mono" style="color:${dirColor}">${m.alpha_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_delta, 4)}</td>
+                <td class="mono" style="color:${dirColor}">${m.alpha_as_tao_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_as_tao_delta, 4)} τ</td>
+                <td class="mono">${status}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    ourEl.innerHTML = `<div class="no-data"><strong>Failed to load movement</strong><span>${e}</span></div>`;
+  }
+}
+
+async function triggerHoldersSync() {
+  try {
+    const btn = document.querySelector('button[onclick="triggerHoldersSync()"]');
+    if (btn) { btn.textContent = 'Syncing…'; btn.disabled = true; }
+    const r = await fetch('/api/holders/sync', { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) { alert('Holders sync failed (' + r.status + ')'); return; }
+    _tabLoaded.movement = false;
+    activateTab('movement');
   } catch (e) { alert(e); }
 }
 

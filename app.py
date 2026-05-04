@@ -364,6 +364,39 @@ async def api_subnet_sync_now(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/holders/movement")
+async def api_holders_movement(_=Depends(require_auth), limit: int = 50):
+    """Top movers in/out of SN21 in the last 24h (Movement tab)."""
+    try:
+        from holders_sync import get_movement
+        return get_movement(limit=limit)
+    except Exception as e:
+        logger.exception("Holders movement failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/holders/our")
+async def api_holders_our(_=Depends(require_auth)):
+    """Our owner-coldkey alpha balance across stored snapshots."""
+    try:
+        from holders_sync import get_our_movement
+        return get_our_movement()
+    except Exception as e:
+        logger.exception("Holders our-movement failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/holders/sync")
+async def api_holders_sync_now(_=Depends(require_auth)):
+    """Run the full SN21 holder snapshot now (~10 paged calls; takes a few seconds)."""
+    try:
+        from holders_sync import sync_holders_snapshot
+        return sync_holders_snapshot()
+    except Exception as e:
+        logger.exception("Holders sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/neurons")
 async def api_neurons(_=Depends(require_auth)):
     """All 256 SN21 UIDs split into validators / miners with window-aware submitting flag."""
@@ -501,6 +534,14 @@ def scheduled_subnet_sync():
         logger.exception("Scheduled subnet daily sync failed")
 
 
+def scheduled_holders_sync():
+    try:
+        from holders_sync import sync_holders_snapshot
+        sync_holders_snapshot()
+    except Exception:
+        logger.exception("Scheduled holders snapshot failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -522,6 +563,12 @@ scheduler.add_job(
     scheduled_subnet_sync,
     CronTrigger(hour=8, minute=30),
     id="daily_subnet",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_holders_sync,
+    CronTrigger(hour=8, minute=45),
+    id="daily_holders",
     replace_existing=True,
 )
 
@@ -546,7 +593,7 @@ async def startup():
 
     scheduler.start()
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet daily 08:30 UTC; tier boundaries)",
+        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45 UTC; tier boundaries)",
         DATA_DIR,
     )
 
