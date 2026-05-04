@@ -25,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
 TRANSFER_PATH = "/api/transfer/v1"
+ACCOUNT_LATEST_PATH = "/api/account/latest/v1"
+PRICE_LATEST_PATH = "/api/price/latest/v1"
 TAOSTATS_STORE = DATA_DIR / "taostats_owner_transfers.json"
+
+# All Bittensor balances are denominated in rao (10^-9 TAO).
+RAO_PER_TAO = 1_000_000_000
 
 # Pagination safety (200 max per page per API docs)
 _DEFAULT_LIMIT = 200
@@ -52,9 +57,13 @@ def _headers() -> dict[str, str]:
     return {"Authorization": key, "Accept": "application/json"}
 
 
-def _get_json(session: requests.Session, params: dict[str, Any]) -> dict[str, Any]:
-    """GET transfer endpoint with retries on rate limit."""
-    url = f"{TAOSTATS_API_BASE}{TRANSFER_PATH}"
+def _get_json(
+    session: requests.Session,
+    params: dict[str, Any],
+    path: str = TRANSFER_PATH,
+) -> dict[str, Any]:
+    """GET a Taostats endpoint with retries on rate limit."""
+    url = f"{TAOSTATS_API_BASE}{path}"
     for attempt in range(5):
         r = session.get(url, params=params, timeout=120)
         if r.status_code == 429:
@@ -67,6 +76,83 @@ def _get_json(session: requests.Session, params: dict[str, Any]) -> dict[str, An
     r = session.get(url, params=params, timeout=120)
     r.raise_for_status()
     return r.json()
+
+
+def _rao_to_tao(value: Any) -> float | None:
+    try:
+        return float(int(value)) / RAO_PER_TAO
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_tao_usd() -> float | None:
+    """Latest TAO/USD spot from Taostats. Reliable from datacenter IPs (CoinGecko isn't)."""
+    if not _api_key():
+        return None
+    session = requests.Session()
+    session.headers.update(_headers())
+    try:
+        body = _get_json(session, {"asset": "tao"}, path=PRICE_LATEST_PATH)
+    except Exception as e:
+        logger.warning("Taostats price fetch failed: %s", e)
+        return None
+    rows = body.get("data") or []
+    if not rows:
+        return None
+    try:
+        return float(rows[0]["price"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def fetch_owner_balance(address: str, network: str = "finney") -> dict[str, Any] | None:
+    """
+    Latest on-chain balance snapshot for `address` from Taostats.
+
+    Bittensor balances live in rao (1 TAO = 10^9 rao). This returns a normalised
+    dict in TAO units plus per-subnet alpha holdings.
+    """
+    if not _api_key():
+        return None
+    session = requests.Session()
+    session.headers.update(_headers())
+    try:
+        body = _get_json(
+            session,
+            {"address": address, "network": network},
+            path=ACCOUNT_LATEST_PATH,
+        )
+    except Exception as e:
+        logger.warning("Taostats balance fetch failed for %s: %s", address[:12] + "…", e)
+        return None
+    rows = body.get("data") or []
+    if not rows:
+        return None
+    row = rows[0]
+    alpha_breakdown = []
+    for ab in row.get("alpha_balances") or []:
+        alpha_breakdown.append(
+            {
+                "netuid": ab.get("netuid"),
+                "hotkey": ab.get("hotkey"),
+                "alpha": _rao_to_tao(ab.get("balance")),
+                "alpha_as_tao": _rao_to_tao(ab.get("balance_as_tao")),
+            }
+        )
+    return {
+        "address": (row.get("address") or {}).get("ss58") or address,
+        "network": network,
+        "block_number": row.get("block_number"),
+        "timestamp": row.get("timestamp"),
+        "rank": row.get("rank"),
+        "balance_total_tao": _rao_to_tao(row.get("balance_total")),
+        "balance_free_tao": _rao_to_tao(row.get("balance_free")),
+        "balance_staked_tao": _rao_to_tao(row.get("balance_staked")),
+        "balance_staked_alpha_as_tao": _rao_to_tao(row.get("balance_staked_alpha_as_tao")),
+        "balance_staked_root_tao": _rao_to_tao(row.get("balance_staked_root")),
+        "balance_total_24hr_ago_tao": _rao_to_tao(row.get("balance_total_24hr_ago")),
+        "alpha_balances": alpha_breakdown,
+    }
 
 
 def _fetch_pages_for_params(
@@ -164,8 +250,10 @@ def sync_owner_transfers() -> dict[str, Any]:
         logger.warning("Taostats sync skipped: set TAOSTATS_OWNER_ID (SS58) or TAOSTATS_ACCOUNT_SS58")
         return {"skipped": True, "reason": "missing owner address"}
 
-    logger.info("Taostats sync: fetching transfers for %s…", addr[:12] + "…")
+    logger.info("Taostats sync: fetching balance + transfers for %s…", addr[:12] + "…")
+    balance = fetch_owner_balance(addr)
     rows, pagination = fetch_all_transfers(address=addr)
+    tao_usd = fetch_tao_usd()
     now = datetime.now(timezone.utc).isoformat()
 
     payload: dict[str, Any] = {
@@ -173,6 +261,8 @@ def sync_owner_transfers() -> dict[str, Any]:
         "api": {"base": TAOSTATS_API_BASE, "path": TRANSFER_PATH},
         "account_ss58": addr,
         "fetched_at_utc": now,
+        "balance": balance,
+        "tao_price_usd": tao_usd,
         "transfer_count": len(rows),
         "last_pagination": pagination,
         "transfers": rows,

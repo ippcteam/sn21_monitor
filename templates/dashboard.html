@@ -570,6 +570,20 @@ async function loadSummary() {
       accent: '#F59E0B',
     },
     {
+      label: 'Wallet balance (on-chain)',
+      value: d.wallet?.balance_total_tao != null ? fmt(d.wallet.balance_total_tao, 4) : '—',
+      unit: 'τ',
+      delta: fmtDelta(d.wallet?.balance_change_24h_pct),
+      sub: d.wallet?.balance_total_tao != null
+        ? (d.tao_price_usd != null
+            ? fmtUsd(d.wallet.balance_total_tao * d.tao_price_usd) + ' · '
+            : '')
+          + 'block ' + (d.wallet.block_number ? d.wallet.block_number.toLocaleString() : '—')
+          + ' · ' + (d.wallet.alpha_balances?.length || 0) + ' subnet position(s)'
+        : 'Run Taostats sync to populate',
+      accent: '#10b981',
+    },
+    {
       label: 'Alpha Price',
       value: fmt(d.alpha_price_tao, 6),
       unit: 'τ',

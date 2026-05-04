@@ -66,9 +66,18 @@ _HTTP_HEADERS = {
 
 def get_tao_price_usd() -> float | None:
     """
-    TAO/USD — CoinGecko often fails from datacenters without a real User-Agent;
-    Binance TAO/USDT is used as fallback (≈ USD).
+    TAO/USD — try Taostats first (authenticated, datacenter-friendly), then
+    CoinGecko (often blocked from cloud egress IPs), then Binance TAO/USDT.
     """
+    try:
+        from taostats_sync import fetch_tao_usd
+
+        v = fetch_tao_usd()
+        if v is not None:
+            return float(v)
+    except Exception as e:
+        logger.warning("Taostats TAO price source failed: %s", e)
+
     for cid in ("bittensor", "tensor"):
         try:
             r = requests.get(

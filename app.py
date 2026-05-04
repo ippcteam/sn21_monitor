@@ -147,6 +147,18 @@ async def api_summary(_=Depends(require_auth)):
         prev_s = prev["subnet"] if prev else {}
         our_today = s.get("our_entitled_alpha")
         our_prev = prev_s.get("our_entitled_alpha") if prev_s else None
+
+        taostats = load_json(TAOSTATS_STORE, {})
+        wallet = taostats.get("balance") or {}
+        live_tao_usd = taostats.get("tao_price_usd")
+        balance_total_tao = wallet.get("balance_total_tao")
+        balance_24h_tao = wallet.get("balance_total_24hr_ago_tao")
+        wallet_pct = (
+            round((balance_total_tao - balance_24h_tao) / balance_24h_tao * 100, 2)
+            if (balance_total_tao is not None and balance_24h_tao)
+            else None
+        )
+
         return {
             "date":                  latest["date"],
             "block":                 latest["block"],
@@ -157,7 +169,7 @@ async def api_summary(_=Depends(require_auth)):
             "entitlement_rate":      s.get("entitlement_rate"),
             "alpha_price_tao":       s.get("alpha_price_tao"),
             "alpha_price_usd":       s.get("alpha_price_usd"),
-            "tao_price_usd":         s.get("tao_price_usd"),
+            "tao_price_usd":         s.get("tao_price_usd") or live_tao_usd,
             "running_total_alpha":   ledger.get("total_accumulated_alpha", 0.0),
             "running_total_our_alpha": ledger.get("total_accumulated_our_alpha", 0.0),
             "our_entitled_usd_est":  s.get("our_entitled_usd_est"),
@@ -181,6 +193,16 @@ async def api_summary(_=Depends(require_auth)):
                 our_today or 0,
                 our_prev,
             ),
+            "wallet": {
+                "address":           wallet.get("address"),
+                "balance_total_tao": balance_total_tao,
+                "balance_24h_ago_tao": balance_24h_tao,
+                "balance_change_24h_pct": wallet_pct,
+                "block_number":      wallet.get("block_number"),
+                "timestamp":         wallet.get("timestamp"),
+                "alpha_balances":    wallet.get("alpha_balances") or [],
+                "fetched_at_utc":    taostats.get("fetched_at_utc"),
+            },
         }
     return {"error": "No data yet"}
 
