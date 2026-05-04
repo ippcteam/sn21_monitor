@@ -28,6 +28,7 @@ from collector import (
     NETUID,
     _configure_chain_ssl,
     _HTTP_HEADERS,
+    _resolve_scalecodec_conflict,
     get_tao_price_usd,
     load_json,
     migrate_and_rebuild_from_logs,
@@ -125,6 +126,7 @@ def run_chain_backfill(
     sleep_s: float = 0.35,
 ) -> dict:
     _configure_chain_ssl()
+    _resolve_scalecodec_conflict()
     import bittensor as bt
 
     start = start or OWNERSHIP_START

@@ -36,6 +36,33 @@ def _configure_chain_ssl() -> None:
         pass
 
 
+def _resolve_scalecodec_conflict() -> None:
+    """
+    bittensor 9.x pulls `scalecodec` directly while async-substrate-interface
+    pulls `cyscale` (transitive); they share a namespace and bittensor's
+    import-time guard refuses to load when both are present. Whichever pip
+    resolved last wins. Remove `scalecodec` from site-packages so the guard
+    sees only `cyscale` (the active implementation). Idempotent.
+    """
+    import importlib
+    import importlib.util
+    import shutil
+
+    spec = importlib.util.find_spec("scalecodec")
+    if spec is None:
+        return
+    locations = list(getattr(spec, "submodule_search_locations", None) or [])
+    if not locations:
+        return
+    for path in locations:
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+            logger.info("Removed scalecodec at %s (cyscale namespace conflict)", path)
+        except Exception as e:
+            logger.warning("Could not remove %s: %s", path, e)
+    importlib.invalidate_caches()
+
+
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 def load_json(path: Path, default):
@@ -205,6 +232,7 @@ def snapshot_from_metagraph(mg, date_str: str, tao_usd: float | None = None) -> 
 def get_snapshot() -> dict:
     """Pull live SN21 metagraph data and return structured snapshot."""
     _configure_chain_ssl()
+    _resolve_scalecodec_conflict()
     import bittensor as bt
 
     logger.info("Syncing SN21 metagraph...")

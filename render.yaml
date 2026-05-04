@@ -2,7 +2,14 @@ services:
   - type: web
     name: sn21-dashboard
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    # bittensor 9.12.2 pulls scalecodec; async-substrate-interface (transitive)
+    # now pulls cyscale. They share a namespace and bittensor's import-time
+    # check raises if both are installed. Drop scalecodec and force-reinstall
+    # cyscale (per the runtime guard message).
+    buildCommand: |
+      pip install -r requirements.txt
+      pip uninstall -y scalecodec
+      pip install --force-reinstall --no-deps cyscale
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DASHBOARD_PASSWORD
