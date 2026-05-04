@@ -5,6 +5,10 @@ jinja2==3.1.4
 python-multipart==0.0.12
 apscheduler==3.10.4
 bittensor==9.12.2
+# Pin to 1.x: bittensor 9.12.2 imports ScaleObj which 2.x dropped, and 2.x
+# also pulls cyscale which collides with scalecodec namespace. 1.5.6+ is the
+# floor that bittensor accepts.
+async-substrate-interface>=1.5.6,<2.0.0
 requests==2.32.3
 certifi>=2024.0.0
 python-dateutil>=2.8.0
