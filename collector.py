@@ -36,31 +36,41 @@ def _configure_chain_ssl() -> None:
         pass
 
 
+_SCALECODEC_FIXED = False
+
+
 def _resolve_scalecodec_conflict() -> None:
     """
     bittensor 9.x pulls `scalecodec` directly while async-substrate-interface
-    pulls `cyscale` (transitive); they share a namespace and bittensor's
-    import-time guard refuses to load when both are present. Whichever pip
-    resolved last wins. Remove `scalecodec` from site-packages so the guard
-    sees only `cyscale` (the active implementation). Idempotent.
+    2.x pulls `cyscale`. They share the `scalecodec` Python namespace and
+    bittensor's import-time guard refuses when both are present. The required
+    fix (per the guard's own error message) is to uninstall both and then
+    force-reinstall cyscale — cyscale's install hooks then register itself
+    as the `scalecodec` namespace. Run that sequence once per process.
     """
-    import importlib
-    import importlib.util
-    import shutil
+    global _SCALECODEC_FIXED
+    if _SCALECODEC_FIXED:
+        return
 
-    spec = importlib.util.find_spec("scalecodec")
-    if spec is None:
-        return
-    locations = list(getattr(spec, "submodule_search_locations", None) or [])
-    if not locations:
-        return
-    for path in locations:
-        try:
-            shutil.rmtree(path, ignore_errors=True)
-            logger.info("Removed scalecodec at %s (cyscale namespace conflict)", path)
-        except Exception as e:
-            logger.warning("Could not remove %s: %s", path, e)
-    importlib.invalidate_caches()
+    import importlib
+    import subprocess
+    import sys as _sys
+
+    try:
+        subprocess.run(
+            [_sys.executable, "-m", "pip", "uninstall", "-y", "scalecodec", "cyscale"],
+            check=False, capture_output=True, timeout=180,
+        )
+        subprocess.run(
+            [_sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", "cyscale"],
+            check=False, capture_output=True, timeout=180,
+        )
+        importlib.invalidate_caches()
+        logger.info("Reinstalled cyscale to resolve scalecodec namespace conflict")
+    except Exception as e:
+        logger.warning("Could not resolve scalecodec/cyscale conflict: %s", e)
+    finally:
+        _SCALECODEC_FIXED = True
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
