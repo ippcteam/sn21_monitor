@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,8 +66,23 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+MAX_429_RETRIES = 5
+
+
 def _get(session: requests.Session, path: str, params: dict[str, Any]) -> dict[str, Any]:
-    r = session.get(f"{TAOSTATS_API_BASE}{path}", params=params, timeout=60)
+    """Authenticated GET with 429-aware retry (1s, 2s, 4s, 8s, 16s)."""
+    url = f"{TAOSTATS_API_BASE}{path}"
+    for attempt in range(MAX_429_RETRIES):
+        r = session.get(url, params=params, timeout=60)
+        if r.status_code == 429:
+            wait = min(2 ** attempt + 0.5, 30)
+            logger.warning("Subnet sync 429 on %s; retry in %ss (attempt %s/%s)",
+                           path, wait, attempt + 1, MAX_429_RETRIES)
+            _time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r = session.get(url, params=params, timeout=60)
     r.raise_for_status()
     return r.json()
 

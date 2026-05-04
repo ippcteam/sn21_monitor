@@ -10,6 +10,7 @@ covers documented coldkey transfers. Extend with additional API paths if you nee
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -251,9 +252,33 @@ def sync_owner_transfers() -> dict[str, Any]:
         return {"skipped": True, "reason": "missing owner address"}
 
     logger.info("Taostats sync: fetching balance + transfers for %s…", addr[:12] + "…")
+
+    # Read prior store first so a partial fetch (e.g. 429 on one of the
+    # sub-calls) doesn't clobber previously-good fields with None.
+    prior = {}
+    try:
+        if TAOSTATS_STORE.exists():
+            with open(TAOSTATS_STORE) as f:
+                prior = json.load(f) or {}
+    except Exception:
+        prior = {}
+
     balance = fetch_owner_balance(addr)
-    rows, pagination = fetch_all_transfers(address=addr)
+    if balance is None and prior.get("balance") is not None:
+        logger.warning("Taostats sync: balance fetch returned None — preserving prior balance")
+        balance = prior.get("balance")
+
+    try:
+        rows, pagination = fetch_all_transfers(address=addr)
+    except Exception as e:
+        logger.warning("Taostats sync: transfers fetch failed (%s) — preserving prior transfers", e)
+        rows = prior.get("transfers") or []
+        pagination = prior.get("last_pagination") or {}
+
     tao_usd = fetch_tao_usd()
+    if tao_usd is None and prior.get("tao_price_usd") is not None:
+        tao_usd = prior.get("tao_price_usd")
+
     now = datetime.now(timezone.utc).isoformat()
 
     payload: dict[str, Any] = {

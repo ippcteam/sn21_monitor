@@ -980,27 +980,21 @@ async function triggerCollect() {
   btn.textContent = 'Refreshing…';
   btn.disabled = true;
   try {
-    /* Fan out all read-only syncs in parallel. /api/collect needs bittensor (slowest);
-       taostats + subnet are fast Taostats reads. Holders snapshot intentionally
-       excluded — runs ~12s; use the in-tab "Sync now" button or wait for 08:45 UTC. */
-    const [collectRes, taoRes, subRes] = await Promise.allSettled([
-      _post('/api/collect'),
-      _post('/api/taostats/sync'),
-      _post('/api/subnet/sync'),
-    ]);
+    /* Sequence the syncs so we don't burst Taostats with parallel paginated calls
+       and trip rate limiting. /api/collect runs first (uses bittensor, no Taostats
+       quota), then taostats sync, then subnet sync. Holders snapshot omitted (~12s);
+       use the in-tab "Sync now" button on Movement instead. */
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const collectRes = await _post('/api/collect').catch(e => ({ ok: false, body: { detail: String(e) } }));
+    await sleep(300);
+    const taoRes = await _post('/api/taostats/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
+    await sleep(300);
+    const subRes = await _post('/api/subnet/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
 
     const failures = [];
-    if (collectRes.status === 'fulfilled' && !collectRes.value.ok) {
-      failures.push('collect: ' + (collectRes.value.body?.detail || collectRes.value.status));
-    } else if (collectRes.status === 'rejected') {
-      failures.push('collect: ' + collectRes.reason);
-    }
-    if (taoRes.status === 'fulfilled' && !taoRes.value.ok) {
-      failures.push('taostats: ' + (taoRes.value.body?.detail || taoRes.value.status));
-    }
-    if (subRes.status === 'fulfilled' && !subRes.value.ok) {
-      failures.push('subnet: ' + (subRes.value.body?.detail || subRes.value.status));
-    }
+    if (!collectRes.ok) failures.push('collect: ' + (collectRes.body?.detail || collectRes.status));
+    if (!taoRes.ok)     failures.push('taostats: ' + (taoRes.body?.detail || taoRes.status));
+    if (!subRes.ok)     failures.push('subnet: ' + (subRes.body?.detail || subRes.status));
 
     if (failures.length) {
       alert('Some refreshes failed:\n' + failures.join('\n'));

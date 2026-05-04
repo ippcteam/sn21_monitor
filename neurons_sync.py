@@ -33,6 +33,7 @@ NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 100
 CACHE_TTL_SECONDS = 60
+MAX_429_RETRIES = 5
 
 _cache_lock = threading.Lock()
 _cache: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
@@ -74,11 +75,20 @@ def _short(addr: str | None, head: int = 8, tail: int = 4) -> str | None:
 
 
 def _fetch_page(session: requests.Session, page: int) -> dict[str, Any]:
-    r = session.get(
-        f"{TAOSTATS_API_BASE}{METAGRAPH_LATEST_PATH}",
-        params={"netuid": NETUID, "limit": PAGE_SIZE, "page": page},
-        timeout=60,
-    )
+    """One paged read of /metagraph/latest with 429-aware retry."""
+    url = f"{TAOSTATS_API_BASE}{METAGRAPH_LATEST_PATH}"
+    params = {"netuid": NETUID, "limit": PAGE_SIZE, "page": page}
+    for attempt in range(MAX_429_RETRIES):
+        r = session.get(url, params=params, timeout=60)
+        if r.status_code == 429:
+            wait = min(2 ** attempt + 0.5, 30)
+            logger.warning("Neurons sync 429 on page %s; retry in %ss (attempt %s/%s)",
+                           page, wait, attempt + 1, MAX_429_RETRIES)
+            _time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r = session.get(url, params=params, timeout=60)
     r.raise_for_status()
     return r.json()
 
@@ -104,6 +114,7 @@ def _fetch_all_uids(session: requests.Session) -> tuple[list[dict[str, Any]], in
         page = int(next_page)
         if page > 10:  # paranoia cap; SN21 has 256 UIDs = 3 pages max
             break
+        _time.sleep(0.4)  # gentle inter-page pacing to dodge bursts of 429s
     return rows, block_number, timestamp
 
 
