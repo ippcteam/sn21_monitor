@@ -418,7 +418,7 @@
   </nav>
   <div class="topbar-right">
     <span class="last-update" id="lastUpdate">—</span>
-    <button class="btn-sm primary" onclick="triggerCollect()">Collect Now</button>
+    <button class="btn-sm primary" onclick="triggerCollect()" title="Run all refreshable syncs (collect, Taostats, subnet daily) in parallel">Refresh</button>
     <a href="/logout" class="btn-sm">Logout</a>
   </div>
 </header>
@@ -505,7 +505,11 @@
 
   <!-- ───────────── ACTIVITY TAB ───────────── -->
   <section class="tab-panel" data-panel="activity">
-    <div class="section-label">Subnet Activity (24h) <span id="activityMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="section-label">
+      Subnet Activity (24h)
+      <span id="activityMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerSubnetSync()" title="Re-pull pool volumes + holder count from Taostats (~2s)">Sync now</button>
+    </div>
     <div class="cards-grid" id="activityCards">
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
@@ -555,7 +559,10 @@
 
   <!-- ───────────── MOVEMENT TAB ───────────── -->
   <section class="tab-panel" data-panel="movement">
-    <div class="section-label">Our Owner Pool · Position</div>
+    <div class="section-label">
+      Our Owner Pool · Position
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerHoldersSync()" title="Re-snapshot all 1968 holders from Taostats (~12s)">Sync now (~12s)</button>
+    </div>
     <div class="cards-grid" id="ourMovementCards">
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
@@ -684,12 +691,22 @@ async function loadSummary() {
       unit: 'τ',
       delta: fmtDelta(d.wallet?.balance_change_24h_pct),
       sub: d.wallet?.balance_total_tao != null
-        ? (d.wallet?.balance_total_usd != null
-            ? '≈ ' + fmtUsd(d.wallet.balance_total_usd) + ' (τ × $' + fmt(d.tao_price_usd, 2) + ')'
-            : 'TAO price unavailable')
-          + ' · block ' + (d.wallet.block_number ? d.wallet.block_number.toLocaleString() : '—')
+        ? 'block ' + (d.wallet.block_number ? d.wallet.block_number.toLocaleString() : '—')
           + ' · ' + (d.wallet.alpha_balances?.length || 0) + ' subnet position(s)'
         : 'Run Taostats sync to populate',
+      accent: '#10b981',
+    },
+    {
+      label: 'Wallet value (USD)',
+      value: d.wallet?.balance_total_usd != null ? fmtUsd(d.wallet.balance_total_usd) : '—',
+      unit: '',
+      delta: fmtDelta(d.wallet?.balance_change_24h_pct),
+      sub: d.wallet?.balance_total_tao != null && d.tao_price_usd != null
+        ? fmt(d.wallet.balance_total_tao, 4) + ' τ × $' + fmt(d.tao_price_usd, 2)
+          + (d.wallet?.balance_24h_ago_usd != null
+              ? ' · 24h ago ' + fmtUsd(d.wallet.balance_24h_ago_usd)
+              : '')
+        : 'TAO price unavailable',
       accent: '#10b981',
     },
     {
@@ -951,35 +968,61 @@ function buildCharts(history) {
   }
 }
 
+async function _post(path) {
+  const r = await fetch(path, { method: 'POST', credentials: 'same-origin' });
+  let body = {};
+  try { body = await r.json(); } catch (_) {}
+  return { ok: r.ok, status: r.status, body };
+}
+
 async function triggerCollect() {
   const btn = document.querySelector('.btn-sm.primary');
-  btn.textContent = 'Collecting…';
+  btn.textContent = 'Refreshing…';
   btn.disabled = true;
   try {
-    const r = await fetch('/api/collect', { method: 'POST', credentials: 'same-origin' });
-    let d = {};
-    try {
-      d = await r.json();
-    } catch (_) {
-      /* non-JSON body */
+    /* Fan out all read-only syncs in parallel. /api/collect needs bittensor (slowest);
+       taostats + subnet are fast Taostats reads. Holders snapshot intentionally
+       excluded — runs ~12s; use the in-tab "Sync now" button or wait for 08:45 UTC. */
+    const [collectRes, taoRes, subRes] = await Promise.allSettled([
+      _post('/api/collect'),
+      _post('/api/taostats/sync'),
+      _post('/api/subnet/sync'),
+    ]);
+
+    const failures = [];
+    if (collectRes.status === 'fulfilled' && !collectRes.value.ok) {
+      failures.push('collect: ' + (collectRes.value.body?.detail || collectRes.value.status));
+    } else if (collectRes.status === 'rejected') {
+      failures.push('collect: ' + collectRes.reason);
     }
-    if (!r.ok) {
-      const msg = d.detail || `Collect failed (${r.status})`;
-      btn.textContent = 'Collect Now';
-      btn.disabled = false;
-      alert(msg);
-      return;
+    if (taoRes.status === 'fulfilled' && !taoRes.value.ok) {
+      failures.push('taostats: ' + (taoRes.value.body?.detail || taoRes.value.status));
     }
-    if (d.status === 'ok') {
-      btn.textContent = 'Done ✓';
-      setTimeout(() => { btn.textContent = 'Collect Now'; btn.disabled = false; init(); }, 1500);
+    if (subRes.status === 'fulfilled' && !subRes.value.ok) {
+      failures.push('subnet: ' + (subRes.value.body?.detail || subRes.value.status));
+    }
+
+    if (failures.length) {
+      alert('Some refreshes failed:\n' + failures.join('\n'));
+    }
+
+    btn.textContent = failures.length ? 'Partial ⚠' : 'Refreshed ✓';
+
+    /* Reload current tab. Home always re-inits. Other tabs re-fetch their data. */
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab || 'home';
+    _tabLoaded.activity = false;
+    _tabLoaded.neurons = false;
+    _tabLoaded.movement = false;
+    if (activeTab === 'home') {
+      await init();
     } else {
-      btn.textContent = 'Collect Now';
-      btn.disabled = false;
-      alert(d.detail || 'Unexpected response');
+      await _tabLoaders[activeTab]?.();
+      _tabLoaded[activeTab] = true;
     }
+
+    setTimeout(() => { btn.textContent = 'Refresh'; btn.disabled = false; }, 1500);
   } catch (e) {
-    btn.textContent = 'Collect Now';
+    btn.textContent = 'Refresh';
     btn.disabled = false;
     alert(e instanceof Error ? e.message : 'Network error');
   }
