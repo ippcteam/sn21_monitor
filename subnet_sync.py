@@ -66,11 +66,12 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-MAX_429_RETRIES = 5
+MAX_429_RETRIES = 7
+INTER_CALL_SLEEP = 0.7
 
 
 def _get(session: requests.Session, path: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Authenticated GET with 429-aware retry (1s, 2s, 4s, 8s, 16s)."""
+    """Authenticated GET with 429-aware exponential backoff (up to ~120s patience)."""
     url = f"{TAOSTATS_API_BASE}{path}"
     for attempt in range(MAX_429_RETRIES):
         r = session.get(url, params=params, timeout=60)
@@ -159,7 +160,13 @@ def fetch_total_holders(session: requests.Session) -> int | None:
 
 
 def sync_subnet_daily() -> dict[str, Any]:
-    """Append today's row to subnet_daily.json (replaces row if same date already present)."""
+    """
+    Append today's row to subnet_daily.json (replaces row if same date already
+    present). Each of the three Taostats sub-calls is paced and individually
+    fault-tolerant — a 429 on one call doesn't take the whole sync down; we
+    fall back to today's row in the existing store (or yesterday's row), and
+    we log which fields are stale.
+    """
     if not _api_key():
         logger.warning("Subnet daily sync skipped: TAOSTATS_API_KEY not set")
         return {"skipped": True, "reason": "missing TAOSTATS_API_KEY"}
@@ -167,11 +174,46 @@ def sync_subnet_daily() -> dict[str, Any]:
     session = requests.Session()
     session.headers.update(_headers())
 
-    pool = fetch_pool_latest(session)
-    subnet = fetch_subnet_latest(session)
-    total_holders = fetch_total_holders(session)
+    existing_log = load_json(SUBNET_DAILY_STORE, [])
+    if not isinstance(existing_log, list):
+        existing_log = []
     fetched_at = datetime.now(timezone.utc)
     date_str = fetched_at.strftime("%Y-%m-%d")
+    fallback_row = next(
+        (r for r in reversed(existing_log) if r.get("date") == date_str),
+        existing_log[-1] if existing_log else None,
+    )
+
+    def _safely(label: str, fetcher):
+        try:
+            return fetcher(session), None
+        except Exception as e:
+            logger.warning("Subnet sync: %s fetch failed: %s", label, e)
+            return None, str(e)
+
+    pool, pool_err = _safely("pool", fetch_pool_latest)
+    _time.sleep(INTER_CALL_SLEEP)
+    subnet, subnet_err = _safely("subnet", fetch_subnet_latest)
+    _time.sleep(INTER_CALL_SLEEP)
+    total_holders, holders_err = _safely("total_holders", fetch_total_holders)
+
+    stale_fields: list[str] = []
+    if pool is None and fallback_row:
+        pool = (fallback_row.get("pool") or {}).copy() or None
+        if pool: stale_fields.append("pool")
+    if subnet is None and fallback_row:
+        subnet = (fallback_row.get("subnet") or {}).copy() or None
+        if subnet: stale_fields.append("subnet")
+    if total_holders is None and fallback_row:
+        total_holders = fallback_row.get("subnet_total_holders")
+        if total_holders is not None: stale_fields.append("subnet_total_holders")
+
+    if pool is None and subnet is None and total_holders is None:
+        return {
+            "skipped": True,
+            "reason": "all subnet sub-fetches failed",
+            "errors": {"pool": pool_err, "subnet": subnet_err, "holders": holders_err},
+        }
 
     row = {
         "date": date_str,
@@ -181,11 +223,10 @@ def sync_subnet_daily() -> dict[str, Any]:
         "pool": pool or {},
         "subnet": subnet or {},
     }
+    if stale_fields:
+        row["stale_fields"] = stale_fields
 
-    log = load_json(SUBNET_DAILY_STORE, [])
-    if not isinstance(log, list):
-        log = []
-    log = [e for e in log if e.get("date") != date_str]
+    log = [e for e in existing_log if e.get("date") != date_str]
     log.append(row)
     log.sort(key=lambda e: e["date"])
     if len(log) > RETENTION_DAYS:
@@ -193,12 +234,13 @@ def sync_subnet_daily() -> dict[str, Any]:
     save_json(SUBNET_DAILY_STORE, log)
 
     logger.info(
-        "Subnet daily sync: holders=%s validators=%s miners=%s buys=%s sells=%s",
+        "Subnet daily sync: holders=%s validators=%s miners=%s buys=%s sells=%s%s",
         total_holders,
         (subnet or {}).get("active_validators"),
         (subnet or {}).get("active_miners"),
         (pool or {}).get("buys_24h"),
         (pool or {}).get("sells_24h"),
+        f" (stale: {','.join(stale_fields)})" if stale_fields else "",
     )
 
     return {
@@ -207,5 +249,6 @@ def sync_subnet_daily() -> dict[str, Any]:
         "block": row["block"],
         "subnet_total_holders": total_holders,
         "rows_stored": len(log),
+        "stale_fields": stale_fields,
         "path": str(SUBNET_DAILY_STORE),
     }
