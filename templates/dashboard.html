@@ -996,10 +996,183 @@ async function init() {
 /* ── Tab switching ─────────────────────────────────────────────── */
 const _tabLoaded = { home: true, activity: false, neurons: false, movement: false };
 const _tabLoaders = {
-  activity: async () => { /* Feature 2 — wired in later commit */ },
+  activity: () => loadActivityTab(),
   neurons:  async () => { /* Features 4+5 — wired in later commit */ },
   movement: async () => { /* Feature 3 — wired in later commit */ },
 };
+
+/* ── Activity tab loader ─────────────────────────────────────── */
+function fmtInt(n) {
+  if (n === null || n === undefined) return '—';
+  try { return Number(n).toLocaleString(); } catch { return String(n); }
+}
+
+function fmtAlpha(n, decimals = 2) {
+  if (n === null || n === undefined) return '—';
+  return parseFloat(n).toFixed(decimals);
+}
+
+async function loadActivityTab() {
+  const grid = document.getElementById('activityCards');
+  try {
+    const [sumRes, histRes] = await Promise.all([
+      fetch('/api/subnet-summary'),
+      fetch('/api/subnet-history?days=30'),
+    ]);
+    const summary = await sumRes.json();
+    const history = await histRes.json();
+
+    if (summary.error) {
+      grid.innerHTML = `<div class="no-data">
+        <strong>${summary.error}</strong>
+        <span>Activity rows accumulate from the daily 08:30 UTC job. <button class="btn-sm" onclick="triggerSubnetSync()">Sync now</button></span>
+      </div>`;
+      return;
+    }
+
+    document.getElementById('activityMeta').textContent =
+      ' · ' + summary.date + ' · block ' + (summary.block ? Number(summary.block).toLocaleString() : '—');
+
+    const pool = summary.pool || {};
+    const subnet = summary.subnet || {};
+    const d = summary.deltas_24h_pct || {};
+
+    const cards = [
+      {
+        label: 'Alpha holders',
+        value: fmtInt(summary.subnet_total_holders),
+        unit: '',
+        delta: summary.holders_change_24h != null
+          ? fmtDelta(summary.holders_change_24h / Math.max(1, summary.subnet_total_holders - summary.holders_change_24h) * 100)
+          : '',
+        sub: summary.holders_change_24h != null
+          ? `${summary.holders_change_24h >= 0 ? '+' : ''}${summary.holders_change_24h} since yesterday`
+          : 'Total unique (hotkey × coldkey) staking SN21',
+        accent: '#2563EB',
+      },
+      {
+        label: 'Alpha bought (24h)',
+        value: fmtAlpha(pool.alpha_buy_volume_24h),
+        unit: 'ξ',
+        delta: fmtDelta(d.alpha_buy_volume),
+        sub: `${fmtAlpha(pool.tao_buy_volume_24h, 2)} τ · ${fmtInt(pool.buys_24h)} buys · ${fmtInt(pool.buyers_24h)} buyers`,
+        accent: '#10b981',
+      },
+      {
+        label: 'Alpha sold (24h)',
+        value: fmtAlpha(pool.alpha_sell_volume_24h),
+        unit: 'ξ',
+        delta: fmtDelta(d.alpha_sell_volume),
+        sub: `${fmtAlpha(pool.tao_sell_volume_24h, 2)} τ · ${fmtInt(pool.sells_24h)} sells · ${fmtInt(pool.sellers_24h)} sellers`,
+        accent: '#EF4444',
+      },
+      {
+        label: 'Net flow',
+        value: fmtAlpha(subnet.net_flow_1d_tao, 2),
+        unit: 'τ (1d)',
+        delta: '',
+        sub: `7d ${fmtAlpha(subnet.net_flow_7d_tao, 2)} τ · 30d ${fmtAlpha(subnet.net_flow_30d_tao, 2)} τ`,
+        accent: '#F59E0B',
+      },
+      {
+        label: 'Active validators / miners',
+        value: `${fmtInt(subnet.active_validators)} / ${fmtInt(subnet.active_miners)}`,
+        unit: '',
+        delta: '',
+        sub: `${fmtInt(subnet.active_keys)} of ${fmtInt(subnet.max_neurons)} keys · tempo ${fmtInt(subnet.tempo)}`,
+        accent: '#8B5CF6',
+      },
+      {
+        label: 'Burn rate',
+        value: subnet.incentive_burn != null ? (subnet.incentive_burn * 100).toFixed(0) + '%' : '—',
+        unit: '',
+        delta: '',
+        sub: `Recycled 24h: ${fmtAlpha(subnet.recycled_24h_tao, 4)} τ · lifetime: ${fmtAlpha(subnet.recycled_lifetime_tao, 0)} τ`,
+        accent: '#6366f1',
+      },
+    ];
+
+    grid.innerHTML = cards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+        ${c.delta}
+        <div class="card-sub">${c.sub}</div>
+      </div>
+    `).join('');
+
+    if (Array.isArray(history) && history.length) {
+      buildActivityCharts(history);
+    }
+  } catch (e) {
+    grid.innerHTML = `<div class="no-data"><strong>Failed to load activity</strong><span>${e}</span></div>`;
+  }
+}
+
+function buildActivityCharts(history) {
+  document.getElementById('activityCharts').style.display = 'grid';
+  const labels = history.map(r => r.date);
+  const holders = history.map(r => r.subnet_total_holders);
+  const alphaBuy = history.map(r => (r.pool || {}).alpha_buy_volume_24h);
+  const alphaSell = history.map(r => (r.pool || {}).alpha_sell_volume_24h);
+  const netFlow = history.map(r => (r.subnet || {}).net_flow_1d_tao);
+
+  const chartOpts = JSON.parse(JSON.stringify(CHART_DEFAULTS));
+  chartOpts.plugins.legend = {
+    display: true,
+    labels: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 }, boxWidth: 10 },
+  };
+
+  const mkCanvas = (id) => document.getElementById(id).getContext('2d');
+
+  if (charts['chartHolders']) charts['chartHolders'].destroy();
+  charts['chartHolders'] = new Chart(mkCanvas('chartHolders'), {
+    type: 'line',
+    data: { labels, datasets: [{
+      label: 'Holders', data: holders,
+      borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,0.06)',
+      borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2,
+    }]},
+    options: chartOpts,
+  });
+  document.getElementById('holdersMeta').textContent =
+    'Latest: ' + fmtInt(holders[holders.length - 1]);
+
+  if (charts['chartVolume']) charts['chartVolume'].destroy();
+  charts['chartVolume'] = new Chart(mkCanvas('chartVolume'), {
+    type: 'bar',
+    data: { labels, datasets: [
+      { label: 'Buy α', data: alphaBuy, backgroundColor: 'rgba(16,185,129,0.45)', borderColor: '#10b981', borderWidth: 1 },
+      { label: 'Sell α', data: alphaSell, backgroundColor: 'rgba(239,68,68,0.45)', borderColor: '#EF4444', borderWidth: 1 },
+    ]},
+    options: chartOpts,
+  });
+
+  if (charts['chartNetFlow']) charts['chartNetFlow'].destroy();
+  charts['chartNetFlow'] = new Chart(mkCanvas('chartNetFlow'), {
+    type: 'bar',
+    data: { labels, datasets: [{
+      label: 'Net flow τ', data: netFlow,
+      backgroundColor: netFlow.map(v => (v ?? 0) >= 0 ? 'rgba(16,185,129,0.45)' : 'rgba(239,68,68,0.45)'),
+      borderColor: netFlow.map(v => (v ?? 0) >= 0 ? '#10b981' : '#EF4444'),
+      borderWidth: 1,
+    }]},
+    options: chartOpts,
+  });
+  const lastNet = netFlow[netFlow.length - 1];
+  document.getElementById('netFlowMeta').textContent =
+    lastNet != null ? 'Latest: ' + Number(lastNet).toFixed(2) + ' τ' : '—';
+}
+
+async function triggerSubnetSync() {
+  try {
+    const r = await fetch('/api/subnet/sync', { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) { alert('Subnet sync failed (' + r.status + ')'); return; }
+    _tabLoaded.activity = false;
+    activateTab('activity');
+  } catch (e) { alert(e); }
+}
 
 function activateTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => {

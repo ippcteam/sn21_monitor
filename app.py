@@ -21,6 +21,7 @@ from apscheduler.triggers.date import DateTrigger
 from collector import migrate_and_rebuild_from_logs, save_json
 from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
 from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
+from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
 
 logging.basicConfig(level=logging.INFO)
@@ -294,6 +295,75 @@ async def api_taostats_sync(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/subnet-summary")
+async def api_subnet_summary(_=Depends(require_auth)):
+    """Latest subnet daily row + 24h-ago row for delta calc (Activity tab)."""
+    log = load_json(SUBNET_DAILY_STORE, [])
+    if not log:
+        return {"error": "No data yet — run /api/subnet/sync"}
+    latest = log[-1]
+    prev = log[-2] if len(log) >= 2 else None
+
+    def delta_pct(today, yesterday):
+        if today is None or not yesterday:
+            return None
+        try:
+            return round((today - yesterday) / yesterday * 100, 2)
+        except Exception:
+            return None
+
+    holders_delta = None
+    if prev and latest.get("subnet_total_holders") is not None and prev.get("subnet_total_holders"):
+        holders_delta = latest["subnet_total_holders"] - prev["subnet_total_holders"]
+
+    return {
+        "date": latest["date"],
+        "fetched_at_utc": latest.get("fetched_at_utc"),
+        "block": latest.get("block"),
+        "subnet_total_holders": latest.get("subnet_total_holders"),
+        "holders_change_24h": holders_delta,
+        "pool": latest.get("pool") or {},
+        "subnet": latest.get("subnet") or {},
+        "deltas_24h_pct": {
+            "alpha_buy_volume": delta_pct(
+                (latest.get("pool") or {}).get("alpha_buy_volume_24h"),
+                (prev or {}).get("pool", {}).get("alpha_buy_volume_24h"),
+            ),
+            "alpha_sell_volume": delta_pct(
+                (latest.get("pool") or {}).get("alpha_sell_volume_24h"),
+                (prev or {}).get("pool", {}).get("alpha_sell_volume_24h"),
+            ),
+            "buyers": delta_pct(
+                (latest.get("pool") or {}).get("buyers_24h"),
+                (prev or {}).get("pool", {}).get("buyers_24h"),
+            ),
+            "sellers": delta_pct(
+                (latest.get("pool") or {}).get("sellers_24h"),
+                (prev or {}).get("pool", {}).get("sellers_24h"),
+            ),
+        },
+    }
+
+
+@app.get("/api/subnet-history")
+async def api_subnet_history(_=Depends(require_auth), days: int = 30):
+    """Last N daily rows for Activity tab charts."""
+    log = load_json(SUBNET_DAILY_STORE, [])
+    if not isinstance(log, list):
+        return []
+    return log[-max(1, min(days, 365)):]
+
+
+@app.post("/api/subnet/sync")
+async def api_subnet_sync_now(_=Depends(require_auth)):
+    """Run the subnet daily sync immediately."""
+    try:
+        return sync_subnet_daily()
+    except Exception as e:
+        logger.exception("Subnet sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -413,6 +483,13 @@ def scheduled_taostats_sync():
         logger.exception("Scheduled Taostats sync failed")
 
 
+def scheduled_subnet_sync():
+    try:
+        sync_subnet_daily()
+    except Exception:
+        logger.exception("Scheduled subnet daily sync failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -428,6 +505,12 @@ scheduler.add_job(
     scheduled_taostats_sync,
     CronTrigger(hour=8, minute=15),
     id="daily_taostats",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_subnet_sync,
+    CronTrigger(hour=8, minute=30),
+    id="daily_subnet",
     replace_existing=True,
 )
 
@@ -452,7 +535,7 @@ async def startup():
 
     scheduler.start()
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00 UTC; Taostats 08:15 UTC; tier boundaries)",
+        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet daily 08:30 UTC; tier boundaries)",
         DATA_DIR,
     )
 
