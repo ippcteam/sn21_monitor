@@ -20,6 +20,9 @@ NETUID          = 21
 NETWORK         = "finney"
 OWNER_SHARE_PCT = 0.18
 DROP_THRESHOLD  = 0.10  # 10% drop triggers alert flag
+BLOCK_SECONDS   = 12
+DEFAULT_TEMPO   = 360
+EMISSION_SCALE_VERSION = 2  # bump when total/owner-share calculation changes
 
 
 def _configure_chain_ssl() -> None:
@@ -111,7 +114,17 @@ def snapshot_from_metagraph(mg, date_str: str, tao_usd: float | None = None) -> 
     hparams = mg.hparams
     pool = mg.pool
 
-    total_emission = float(sum(emissions))
+    # mg.emission is the per-tempo emission to UIDs (the 82% miner+validator slice;
+    # the 18% subnet-owner cut is paid to the owner hotkey directly and is NOT in
+    # the metagraph emission vector). Convert to per-day and gross up to the full
+    # subnet emission so downstream owner/our shares reflect actual on-chain inflows.
+    uid_per_tempo = float(sum(emissions))
+    tempo_blocks = (
+        int(hparams.tempo) if hasattr(hparams, "tempo") and hparams.tempo else DEFAULT_TEMPO
+    )
+    tempos_per_day = 86400 / (tempo_blocks * BLOCK_SECONDS)
+    uid_per_day = uid_per_tempo * tempos_per_day
+    total_emission = uid_per_day / (1 - OWNER_SHARE_PCT)
     owner_share = round(total_emission * OWNER_SHARE_PCT, 8)
 
     try:
@@ -144,17 +157,19 @@ def snapshot_from_metagraph(mg, date_str: str, tao_usd: float | None = None) -> 
     subnet = {
         "total_alpha_emission": round(total_emission, 8),
         "owner_share_alpha": owner_share,
-        "miner_validator_alpha": round(total_emission * 0.82, 8),
+        "miner_validator_alpha": round(uid_per_day, 8),
         "alpha_price_tao": round(alpha_price_tao, 8) if alpha_price_tao else None,
         "alpha_price_usd": alpha_price_usd,
         "tao_price_usd": tao_usd,
         "tao_in_pool": round(tao_in, 4) if tao_in else None,
         "alpha_in_pool": round(alpha_in, 4) if alpha_in else None,
-        "tempo": int(hparams.tempo) if hasattr(hparams, "tempo") else None,
+        "tempo": tempo_blocks,
+        "tempos_per_day": round(tempos_per_day, 6),
         "entitlement_rate": ent_rate,
         "our_entitled_alpha": our_entitled,
         "our_entitled_usd_est": our_usd,
         "owner_pool_usd_est": owner_usd,
+        "emission_scale_v": EMISSION_SCALE_VERSION,
     }
 
     stamp = datetime.now(timezone.utc).isoformat()
@@ -199,6 +214,37 @@ def append_daily_log(snapshot: dict) -> list:
     return log
 
 
+def _apply_emission_scale_fix(entry: dict) -> bool:
+    """
+    One-time migration: legacy rows stored `sum(mg.emission)` directly as
+    `total_alpha_emission`, but that vector is per-tempo and excludes the 18%
+    owner cut. Scale stored alpha amounts by `tempos_per_day / 0.82` so they
+    represent gross daily subnet emission. Idempotent via `emission_scale_v`.
+    """
+    sub = entry.get("subnet") or {}
+    if sub.get("emission_scale_v") == EMISSION_SCALE_VERSION:
+        return False
+    tempo_blocks = int(sub.get("tempo") or DEFAULT_TEMPO)
+    tempos_per_day = 86400 / (tempo_blocks * BLOCK_SECONDS)
+    factor = tempos_per_day / (1 - OWNER_SHARE_PCT)
+
+    legacy_total = sub.get("total_alpha_emission")
+    if isinstance(legacy_total, (int, float)):
+        sub["total_alpha_emission"] = round(legacy_total * factor, 8)
+    legacy_owner = sub.get("owner_share_alpha")
+    if isinstance(legacy_owner, (int, float)):
+        sub["owner_share_alpha"] = round(legacy_owner * factor, 8)
+    legacy_uid = sub.get("miner_validator_alpha")
+    if isinstance(legacy_uid, (int, float)):
+        # Old: total_per_tempo * 0.82 (still per-tempo); new: gross daily * 0.82
+        sub["miner_validator_alpha"] = round(legacy_uid * factor, 8)
+
+    sub["tempos_per_day"] = round(tempos_per_day, 6)
+    sub["emission_scale_v"] = EMISSION_SCALE_VERSION
+    entry["subnet"] = sub
+    return True
+
+
 def enrich_daily_log_entry(entry: dict) -> bool:
     """Ensure subnet has entitlement fields from date + owner_share_alpha. Returns True if changed."""
     ds = entry.get("date", "")[:10]
@@ -236,6 +282,8 @@ def migrate_and_rebuild_from_logs() -> None:
 
     changed = False
     for e in log:
+        if _apply_emission_scale_fix(e):
+            changed = True
         if enrich_daily_log_entry(e):
             changed = True
     if changed:
