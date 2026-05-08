@@ -1,116 +1,172 @@
 # SN21 · HOPE Emissions Dashboard
 
-Bittensor Subnet 21 daily emissions monitor with authenticated web dashboard.
+Bittensor Subnet 21 monitor with authenticated web dashboard. Tracks owner-key
+emissions, the entitlement schedule, House-labeled validators/miners, holder
+movements, and burn-aware weekly earnings.
 
 ## Stack
 
-- **FastAPI** — serves dashboard + API
-- **APScheduler** — daily 08:00 UTC collection (no separate cron service needed)
-- **Render.com** — web service + 1GB persistent disk for JSON logs
-- **Chart.js** — browser-side charts (no extra backend)
-- **bittensor SDK** — metagraph data
-- **CoinGecko** — TAO/USD price (free, no API key)
+- **FastAPI** — dashboard + API
+- **APScheduler** — daily UTC syncs (no separate cron service)
+- **Render.com** — web service + 1 GB persistent disk for JSON stores
+- **Chart.js** — browser-side charts
+- **bittensor SDK** — metagraph reads
+- **Taostats API** — wallet balance, transfers, metagraph, holders, prices
+- **CoinGecko / Binance** — TAO/USD price fallbacks
 
-## Dashboard Shows
+## Tabs
 
-| Card | Data |
-|------|------|
-| Owner Share Today | Daily 18% alpha cut |
-| Running Accumulation | Total owner alpha earned since day 1 |
-| Alpha Price | τ per ξ (with USD estimate) |
-| TAO Price | USD from CoinGecko |
+| Tab | What it shows |
+|-----|---------------|
+| **Home** | Live metrics (owner pool 18%, our entitlement, alpha price, TAO price, wallet balance/USD) · **House Earnings · Current Mining Week** (miners net + gross, validators, owner key, burn pill) · 5-week stacked weekly chart · trend charts · active UID table |
+| **Activity** | Subnet 24h pool volumes (buy/sell), holder count, burn rate, active validator/miner counts · 30-day trend charts |
+| **Neurons** | All 256 SN21 UIDs split into validators / miners, with mining/validation window detection (Mon 12:00 ET → following Mon 12:00 ET), submitting-in-window flag, and **House toggle column** (☆/★) plus All/House/Other filter pills |
+| **Movement** | Our owner-coldkey alpha balance over time · 24h holder movers (top inflows/outflows, NEW/EXITED/BOUGHT/SOLD), with House column and house/other split in the summary |
 
-Charts: owner accumulation over time, alpha price history, TAO price history, daily emission (total vs owner).
+## House vs Other labels
 
-## Deploy to Render
+Any wallet (coldkey or hotkey SS58) can be tagged **House** so dashboards can
+split your operator's keys from third parties.
 
-### 1. Push to GitHub
+- A UID is House if either its **coldkey** OR its **hotkey** is in the label set.
+- Labels live in `data/wallet_labels.json` and survive deploys.
+- Env seed (`HOUSE_COLDKEYS`, `HOUSE_HOTKEYS`) populates the store on first
+  boot; after that the dashboard UI is the source of truth.
+- The SN21 owner hotkey (`is_owner_hotkey=true` on the metagraph) is
+  auto-labeled as House on first sight.
+
+Toggle inline on the **Neurons** tab via the ☆/★ button on each row, or via:
 
 ```bash
-git init
-git add .
-git commit -m "init sn21 dashboard"
-git remote add origin https://github.com/YOUR_USERNAME/sn21-dashboard.git
-git push -u origin main
+# CRUD (session-cookie auth required)
+GET    /api/labels                  # list current labels
+POST   /api/labels                  # { ss58, kind: "coldkey"|"hotkey", note? }
+DELETE /api/labels/{ss58}           # remove
 ```
 
-### 2. Create Render Web Service
+## Burn-aware weekly earnings
 
-1. Go to https://render.com → **New → Web Service**
-2. Connect your GitHub repo
-3. Render will auto-detect `render.yaml`
+Aggregated to the SN21 mining/validation week (`Mon 12:00 ET → following Mon 12:00 ET`):
 
-Or set manually:
-- **Runtime**: Python 3
-- **Build Command**: `pip install -r requirements.txt`
-- **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+| Bucket | Burn behaviour |
+|--------|----------------|
+| House Miners — **net** | `daily_mining_alpha − daily_burned_alpha` summed across the week — true realised earnings |
+| House Miners — gross | `daily_mining_alpha` summed — what would have been earned at 0 % burn |
+| House Validators | `daily_validating_alpha` summed — **burn-immune** |
+| Owner Key Emissions | `our_entitled_alpha` summed (the 18 % subnet cut × tier) — **burn-immune** |
 
-### 3. Set Environment Variable
+Today the subnet runs at 100 % burn so the miner *net* card reads zero.
+When the first non-100% epoch lands, the green burn pill flips on and the net
+column starts moving — **no deploy needed**, the math just resolves.
 
-In Render dashboard → **Environment**:
-
-```
-DASHBOARD_PASSWORD = your-secret-password-here
-```
-
-Never commit this. The `render.yaml` marks it `sync: false` so Render won't auto-populate it.
-
-### 4. Attach Persistent Disk
-
-Render dashboard → your service → **Disks** → Add:
-- **Name**: sn21-data
-- **Mount Path**: /data
-- **Size**: 1 GB
-
-This keeps your JSON logs alive across deploys.
-
-### 5. Deploy
-
-Render will build and deploy. Your dashboard will be live at:
-```
-https://sn21-dashboard.onrender.com
+```bash
+GET  /api/house/weekly?weeks=4      # current week + N prior weeks (auth)
+POST /api/house/snapshot            # take per-UID daily snapshot now (auth)
 ```
 
-(Or your custom domain if configured.)
+Set `BURN_FLIP_DATE=YYYY-MM-DD` in env to surface the expected first
+non-100% epoch on the dashboard.
 
-## File Structure
-
-```
-sn21-dashboard/
-├── app.py            — FastAPI app, auth, scheduler, API routes
-├── collector.py      — Metagraph + price fetching, log writing
-├── requirements.txt
-├── render.yaml       — Render deployment config
-└── templates/
-    ├── login.html    — Auth page
-    └── dashboard.html — Main dashboard
-```
-
-## Data Files (on /data disk)
+## Data files (on /data disk)
 
 ```
 /data/
-├── daily_log.json     — One entry per day, full snapshot
-└── owner_ledger.json  — Running accumulation tracker
+├── daily_log.json              — one entry per day: subnet snapshot + active UIDs
+├── owner_ledger.json           — running entitlement accumulation
+├── taostats_owner_transfers.json — owner-coldkey TAO transfers + balance + tao_price
+├── subnet_daily.json           — daily pool/holders rows for Activity tab (365d)
+├── holders_snapshots.json      — last 7 daily holder snapshots (~1968 rows each)
+├── neurons_daily.json          — last 90 days of per-UID earnings rows
+└── wallet_labels.json          — House vs Other label store
 ```
 
-## Manual Collection
+## Scheduled jobs (UTC)
 
-Hit **Collect Now** in the dashboard to trigger an immediate collection outside the daily schedule.
+| Job | When | Source |
+|-----|------|--------|
+| Chain collect (metagraph + prices) | 08:00 | `collector.run_collection` |
+| Taostats owner sync (transfers + balance + price) | 08:15 | `taostats_sync.sync_owner_transfers` |
+| Subnet daily sync (Activity tab data) | 08:30 | `subnet_sync.sync_subnet_daily` |
+| Holders snapshot (Movement tab data) | 08:45 | `holders_sync.sync_holders_snapshot` |
+| Neurons per-UID daily snapshot (House weekly data) | 09:00 | `neurons_daily_sync.sync_neurons_daily` |
+| Tier-boundary log marker | one-off at each tier flip date | `app.log_tier_boundary` |
 
-Or via API (authenticated):
-```bash
-curl -X POST https://your-app.onrender.com/api/collect \
-  -H "Cookie: sn21_session=YOUR_SESSION_TOKEN"
+Holders sync now self-schedules **one retry 30 min later** if Taostats 429s
+exhaust the page-level retry budget (8 attempts, 60s cap, page-aware pacing
+from page 5 onwards).
+
+## API surface
+
+All endpoints below require dashboard-session auth except `/api/import-data`,
+which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
+
+### Read
+- `GET /api/summary` — Home cards (latest snapshot + ledger totals + wallet)
+- `GET /api/history?days=30` — time-series for Home charts
+- `GET /api/uids` — active UIDs from latest snapshot
+- `GET /api/taostats?transfers_limit=100` — Taostats sync result
+- `GET /api/subnet-summary` — Activity tab cards
+- `GET /api/subnet-history?days=30` — Activity tab charts
+- `GET /api/holders/movement?limit=50` — Movement tab top movers
+- `GET /api/holders/our` — Movement tab "Our Owner Pool" series
+- `GET /api/neurons` — Neurons tab full payload (256 UIDs)
+- `GET /api/labels` — current House label set
+- `GET /api/house/weekly?weeks=4` — burn-aware weekly earnings rollup
+
+### Write / trigger (auth)
+- `POST /api/collect` — manual chain collect
+- `POST /api/taostats/sync` — manual Taostats sync
+- `POST /api/subnet/sync` — manual subnet daily sync
+- `POST /api/holders/sync` — manual holders snapshot (~12 s)
+- `POST /api/house/snapshot` — manual per-UID daily snapshot
+- `POST /api/labels` — add House label
+- `DELETE /api/labels/{ss58}` — remove House label
+- `POST /api/backfill` — long-running chain backfill (archive subtensor)
+- `POST /api/import-data` — upload `daily_log.json` / `owner_ledger.json` (header-key auth)
+
+The topbar **Refresh** button fans out collect → taostats → subnet → house-snapshot
+sequentially with 300 ms gaps. Holders snapshot is intentionally excluded
+(~12 s); use the per-tab **Sync now** buttons for that and the Activity sync.
+
+## Environment variables
+
+```ini
+# Dashboard auth (required)
+DASHBOARD_PASSWORD=…
+
+# Data dir (Render disk; falls back to ./data locally)
+SN21_DATA_DIR=/data
+
+# Ownership tier schedule (start of month-1)
+OWNERSHIP_START_DATE=2026-03-20
+
+# Subtensor archive node for chain backfill
+SUBTENSOR_ARCHIVE_NETWORK=archive
+
+# Taostats — wallet, holders, transfers, metagraph, prices
+TAOSTATS_API_KEY=
+TAOSTATS_OWNER_ID=
+
+# House labels (env seed; UI is source of truth after first boot)
+HOUSE_COLDKEYS=…,…
+HOUSE_HOTKEYS=…,…
+
+# Burn flip — informational (dashboard surfaces until live burn drops below 100%)
+BURN_FLIP_DATE=
 ```
 
-## Local Dev
+## Local dev
 
 ```bash
-# Use a local /data path for dev
-mkdir -p /data
+mkdir -p data
 pip install -r requirements.txt
-DASHBOARD_PASSWORD=dev uvicorn app:app --reload --port 8000
+DASHBOARD_PASSWORD=dev SN21_DATA_DIR=./data .venv/bin/uvicorn app:app --reload --port 8000
 ```
 
-Note: for local dev, change `secure=True` to `secure=False` in the `set_cookie` call in `app.py`.
+Set `secure=False` on the `set_cookie` call in `app.py` for HTTP localhost.
+
+## Deploy to Render
+
+Push to `main` — the service auto-deploys (`render.yaml` is the source of truth).
+The 1 GB disk at `/data` keeps JSON stores alive across deploys. Set the env
+vars above in the Render dashboard.
