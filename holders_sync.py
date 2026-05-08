@@ -33,10 +33,25 @@ NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 200
 SNAPSHOT_RETENTION = 7
-INTER_PAGE_SLEEP = 0.6   # Taostats throttles bursts; 10 pages × 600 ms = 6 s
-MAX_429_RETRIES = 5
+INTER_PAGE_SLEEP = 0.8        # default pacing between pages
+LATE_PAGE_THRESHOLD = 4       # pages > this get extra pacing
+LATE_PAGE_SLEEP = 2.0         # Taostats reliably 429s page 6 — slow that ramp
+MAX_429_RETRIES = 8           # was 5; total worst-case backoff ~5 min
+MAX_BACKOFF_S = 60            # cap any single retry at 60s
 
 HOLDERS_STORE = DATA_DIR / "holders_snapshots.json"
+
+
+def _retry_after_seconds(resp) -> float | None:
+    """Honor Retry-After header if Taostats sends one."""
+    raw = resp.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return min(float(raw), MAX_BACKOFF_S)
+    except (TypeError, ValueError):
+        # HTTP-date form — not worth parsing; let exponential take over.
+        return None
 
 
 def _api_key() -> str | None:
@@ -62,19 +77,29 @@ def _to_int(v: Any) -> int:
 
 
 def _fetch_page(session: requests.Session, page: int) -> dict[str, Any]:
-    """One paginated read of stake_balance/latest with 429 backoff."""
+    """One paginated read of stake_balance/latest, resilient to Taostats 429s.
+
+    Honors Retry-After when present, otherwise exponential backoff capped at
+    MAX_BACKOFF_S. Worst-case total wait ≈ 2+4+8+16+32+60+60+60 ≈ 4 min over
+    8 retries, well within the daily window.
+    """
     url = f"{TAOSTATS_API_BASE}{STAKE_BALANCE_LATEST_PATH}"
     params = {"netuid": NETUID, "limit": PAGE_SIZE, "page": page, "order": "balance_desc"}
     for attempt in range(MAX_429_RETRIES):
         r = session.get(url, params=params, timeout=120)
         if r.status_code == 429:
-            wait = min(2 ** attempt + 0.5, 30)
-            logger.warning("Holders sync 429 on page %s; retry %ss (attempt %s/%s)",
-                           page, wait, attempt + 1, MAX_429_RETRIES)
+            ra = _retry_after_seconds(r)
+            wait = ra if ra is not None else min(2 ** attempt + 1.0, MAX_BACKOFF_S)
+            logger.warning(
+                "Holders sync 429 on page %s; retry in %.1fs (attempt %s/%s%s)",
+                page, wait, attempt + 1, MAX_429_RETRIES,
+                ", honoring Retry-After" if ra is not None else "",
+            )
             _time.sleep(wait)
             continue
         r.raise_for_status()
         return r.json()
+    # Final attempt — let the HTTPError surface with full status detail.
     r = session.get(url, params=params, timeout=120)
     r.raise_for_status()
     return r.json()
@@ -105,7 +130,8 @@ def _fetch_all_holders(session: requests.Session) -> list[dict[str, Any]]:
         page = int(next_page)
         if page > 100:  # paranoia cap
             break
-        _time.sleep(INTER_PAGE_SLEEP)
+        # Pages 5+ are where Taostats reliably throttles; pace them more.
+        _time.sleep(LATE_PAGE_SLEEP if page > LATE_PAGE_THRESHOLD else INTER_PAGE_SLEEP)
     return all_rows
 
 

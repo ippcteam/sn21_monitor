@@ -596,12 +596,33 @@ def scheduled_subnet_sync():
         logger.exception("Scheduled subnet daily sync failed")
 
 
-def scheduled_holders_sync():
+def _holders_sync_with_retry(attempt: int = 1) -> None:
+    """Run the holders snapshot. On failure, schedule one retry 30 min later."""
     try:
         from holders_sync import sync_holders_snapshot
         sync_holders_snapshot()
+        if attempt > 1:
+            logger.info("Holders snapshot retry #%s succeeded", attempt)
     except Exception:
-        logger.exception("Scheduled holders snapshot failed")
+        logger.exception("Holders snapshot attempt %s failed", attempt)
+        if attempt < 3:
+            run_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+            scheduler.add_job(
+                _holders_sync_with_retry,
+                DateTrigger(run_date=run_at),
+                args=[attempt + 1],
+                id=f"holders_retry_{run_at.strftime('%Y%m%dT%H%M')}",
+                replace_existing=True,
+                misfire_grace_time=3600,
+            )
+            logger.warning(
+                "Scheduled holders snapshot retry #%s at %s UTC",
+                attempt + 1, run_at.isoformat(),
+            )
+
+
+def scheduled_holders_sync():
+    _holders_sync_with_retry(attempt=1)
 
 
 def scheduled_neurons_daily():
