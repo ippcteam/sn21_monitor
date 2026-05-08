@@ -11,7 +11,7 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, File, UploadFile
+from fastapi import Body, FastAPI, Request, Response, HTTPException, Depends, File, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -408,6 +408,68 @@ async def api_neurons(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Wallet labels (House vs Other) ────────────────────────────────────────────
+
+@app.get("/api/labels")
+async def api_labels_list(_=Depends(require_auth)):
+    """Current wallet label set (House)."""
+    from labels import list_labels
+    return {"labels": list_labels()}
+
+
+@app.post("/api/labels")
+async def api_labels_set(payload: dict = Body(...), _=Depends(require_auth)):
+    """Add or update a House label.
+
+    Body: { ss58: str, kind: "coldkey"|"hotkey", note?: str }
+    """
+    from labels import set_label
+    ss58 = (payload.get("ss58") or "").strip()
+    kind = (payload.get("kind") or "").strip()
+    note = payload.get("note")
+    if not ss58:
+        raise HTTPException(status_code=400, detail="ss58 is required")
+    if kind not in {"coldkey", "hotkey"}:
+        raise HTTPException(status_code=400, detail="kind must be 'coldkey' or 'hotkey'")
+    try:
+        return {"label": set_label(ss58, kind, note)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/labels/{ss58}")
+async def api_labels_delete(ss58: str, _=Depends(require_auth)):
+    """Remove a House label."""
+    from labels import remove_label
+    return {"removed": remove_label(ss58), "ss58": ss58}
+
+
+# ── House weekly earnings ─────────────────────────────────────────────────────
+
+@app.get("/api/house/weekly")
+async def api_house_weekly(_=Depends(require_auth), weeks: int = 4):
+    """Weekly House earnings (current + N prior weeks). Burn-aware: miner
+    rollups expose gross / burned / net; validators and owner key are burn-
+    immune and reported as-is."""
+    try:
+        from house_weekly import get_weekly
+        return get_weekly(weeks=weeks)
+    except Exception as e:
+        logger.exception("House weekly rollup failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/house/snapshot")
+async def api_house_snapshot_now(_=Depends(require_auth)):
+    """Run a per-UID daily earnings snapshot now (idempotent for today's date)."""
+    try:
+        from neurons_daily_sync import sync_neurons_daily
+        return sync_neurons_daily()
+    except Exception as e:
+        logger.exception("Neurons daily snapshot failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -542,6 +604,14 @@ def scheduled_holders_sync():
         logger.exception("Scheduled holders snapshot failed")
 
 
+def scheduled_neurons_daily():
+    try:
+        from neurons_daily_sync import sync_neurons_daily
+        sync_neurons_daily()
+    except Exception:
+        logger.exception("Scheduled neurons daily snapshot failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -571,6 +641,12 @@ scheduler.add_job(
     id="daily_holders",
     replace_existing=True,
 )
+scheduler.add_job(
+    scheduled_neurons_daily,
+    CronTrigger(hour=9, minute=0),
+    id="daily_neurons_snapshot",
+    replace_existing=True,
+)
 
 
 @app.on_event("startup")
@@ -593,7 +669,7 @@ async def startup():
 
     scheduler.start()
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45 UTC; tier boundaries)",
+        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00 UTC; tier boundaries)",
         DATA_DIR,
     )
 

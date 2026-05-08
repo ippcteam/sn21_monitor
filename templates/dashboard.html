@@ -399,6 +399,79 @@
     .alert-banner.show { display: flex; }
     .alert-drop  { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); color: var(--red); }
     .alert-surge { background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); color: var(--green); }
+
+    /* ── House labels ── */
+    .house-chip {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      font-family: var(--mono);
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      background: rgba(245,158,11,0.12);
+      border: 1px solid rgba(245,158,11,0.4);
+      color: var(--amber);
+      text-transform: uppercase;
+    }
+    .house-toggle {
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.05em;
+      padding: 0.15rem 0.45rem;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .house-toggle:hover { border-color: var(--amber); color: var(--amber); }
+    .house-toggle.is-house {
+      background: rgba(245,158,11,0.12);
+      border-color: rgba(245,158,11,0.5);
+      color: var(--amber);
+    }
+    .filter-bar {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-bottom: 0.75rem;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+    }
+    .filter-bar .label { color: var(--muted); letter-spacing: 0.15em; text-transform: uppercase; }
+    .filter-pill {
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      letter-spacing: 0.05em;
+    }
+    .filter-pill.active { background: rgba(37,99,235,0.15); border-color: var(--blue); color: var(--blue-lt); }
+
+    /* House net/gross stacked card */
+    .card-secondary {
+      margin-top: 0.4rem;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+    .card-secondary .strike { color: var(--text-dim); }
+    .burn-pill {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.1rem 0.45rem;
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.35);
+      color: var(--red);
+    }
+    .burn-pill.live { background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.35); color: var(--green); }
   </style>
 </head>
 <body>
@@ -435,6 +508,25 @@
   <div class="section-label">Live Metrics <span id="ownershipHint" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
   <div class="cards-grid" id="cardsGrid">
     <div class="loading"><div class="spinner"></div> Loading…</div>
+  </div>
+
+  <!-- ── House Earnings · Current Mining Week ── -->
+  <div class="section-label">
+    House Earnings · Current Mining Week
+    <span id="houseWeekMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+  </div>
+  <div class="cards-grid" id="houseWeekCards">
+    <div class="loading"><div class="spinner"></div> Loading…</div>
+  </div>
+
+  <div class="charts-grid" id="houseWeekChartGrid" style="display:none">
+    <div class="chart-card full">
+      <div class="chart-header">
+        <span class="chart-title">Weekly House Earnings (last 5 weeks)</span>
+        <span class="chart-meta" id="houseWeekChartMeta">Net miners · Validators · Owner key · (gross overlay)</span>
+      </div>
+      <div class="chart-canvas-wrap"><canvas id="chartHouseWeekly"></canvas></div>
+    </div>
   </div>
 
   <!-- ── Charts ── -->
@@ -546,6 +638,14 @@
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
 
+    <div class="filter-bar">
+      <span class="label">Filter</span>
+      <button class="filter-pill active" data-house-filter="all">All</button>
+      <button class="filter-pill" data-house-filter="house">House only</button>
+      <button class="filter-pill" data-house-filter="other">Other only</button>
+      <span style="margin-left:auto;color:var(--muted)">Click ☆/★ in the House column to mark/unmark.</span>
+    </div>
+
     <div class="section-label">Validators · Validation Window <span id="valWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
     <div class="table-card" id="validatorsTable">
       <div class="loading"><div class="spinner"></div> Loading…</div>
@@ -628,6 +728,151 @@ function fmtDelta(pct) {
   if (pct > 0) return `<span class="card-delta delta-up">▲ ${abs}%</span>`;
   if (pct < 0) return `<span class="card-delta delta-down">▼ ${abs}%</span>`;
   return `<span class="card-delta delta-flat">— 0%</span>`;
+}
+
+/* ── House weekly loader ────────────────────────────────────── */
+function fmtAlphaSafe(n, dp = 4) {
+  if (n === null || n === undefined) return '—';
+  return parseFloat(n).toFixed(dp);
+}
+function fmtBurn(rate) {
+  if (rate === null || rate === undefined) return '—';
+  return (rate * 100).toFixed(1) + '%';
+}
+
+async function loadHouseWeekly() {
+  const cardsEl = document.getElementById('houseWeekCards');
+  const chartGrid = document.getElementById('houseWeekChartGrid');
+  const meta = document.getElementById('houseWeekMeta');
+  try {
+    const r = await fetch('/api/house/weekly?weeks=4');
+    const d = await r.json();
+    if (d.error || !d.current) {
+      cardsEl.innerHTML = `<div class="no-data"><strong>${d.error || 'No weekly data yet'}</strong>
+        <span>Snapshots populate from the daily 09:00 UTC job.
+          <button class="btn-sm" onclick="triggerHouseSnapshot()">Snapshot now</button>
+        </span></div>`;
+      return;
+    }
+    const cur = d.current;
+    const wow = d.wow_pct || {};
+    const burnRate = cur.burn?.rate;
+    const burnLive = burnRate != null && burnRate < 1;
+
+    const fmtETrange = (s, e) => {
+      const f = (iso) => {
+        try { return new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit' }); }
+        catch { return iso; }
+      };
+      return f(s) + ' → ' + f(e);
+    };
+    const flipNote = d.burn_flip_date ? ' · first non-100% epoch ≈ ' + d.burn_flip_date : '';
+    meta.innerHTML = ' · ' + fmtETrange(cur.start_et, cur.end_et) + ' ET · '
+      + 'covers ' + cur.coverage.days_with_data + '/' + cur.coverage.days_in_window + ' days'
+      + ' <span class="burn-pill ' + (burnLive ? 'live' : '') + '">Burn ' + fmtBurn(burnRate) + '</span>'
+      + flipNote;
+
+    const m = cur.house_miners;
+    const v = cur.house_validators;
+    const o = cur.owner_key;
+
+    const cards = [
+      {
+        label: 'House Miners · NET',
+        value: fmtAlphaSafe(m.alpha_net, 4),
+        unit: 'ξ',
+        delta: fmtDelta(wow.house_miners_alpha_net),
+        sub: `<span class="strike">Gross ${fmtAlphaSafe(m.alpha_gross, 4)} ξ · burned ${fmtAlphaSafe(m.alpha_burned, 4)}</span>`
+          + (m.usd_net != null ? ` · ${fmtUsd(m.usd_net)}` : '')
+          + ` · ${m.uid_count || 0} UID${m.uid_count === 1 ? '' : 's'}`,
+        accent: burnLive ? '#10b981' : '#475569',
+      },
+      {
+        label: 'House Validators',
+        value: fmtAlphaSafe(v.alpha, 4),
+        unit: 'ξ',
+        delta: fmtDelta(wow.house_validators_alpha),
+        sub: (v.tao != null ? `${fmtAlphaSafe(v.tao, 4)} τ` : '—')
+          + (v.usd != null ? ` · ${fmtUsd(v.usd)}` : '')
+          + ` · ${v.uid_count || 0} UID${v.uid_count === 1 ? '' : 's'} · burn-immune`,
+        accent: '#2563EB',
+      },
+      {
+        label: 'Owner Key Emissions (18%)',
+        value: fmtAlphaSafe(o.alpha, 4),
+        unit: 'ξ',
+        delta: fmtDelta(wow.owner_key_alpha),
+        sub: (o.tao != null ? `${fmtAlphaSafe(o.tao, 4)} τ` : '—')
+          + (o.usd != null ? ` · ${fmtUsd(o.usd)}` : '')
+          + ' · entitled share of 18% subnet cut',
+        accent: '#F59E0B',
+      },
+    ];
+    cardsEl.innerHTML = cards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+        ${c.delta}
+        <div class="card-sub">${c.sub}</div>
+      </div>
+    `).join('');
+
+    buildHouseWeeklyChart(d.history || []);
+    chartGrid.style.display = 'grid';
+  } catch (e) {
+    cardsEl.innerHTML = `<div class="no-data"><strong>Failed to load weekly</strong><span>${e}</span></div>`;
+  }
+}
+
+function buildHouseWeeklyChart(history) {
+  if (!history.length) return;
+  const ordered = history.slice().reverse(); // oldest → newest
+  const labels = ordered.map(w => {
+    try { return new Date(w.start_et).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }); }
+    catch { return w.start_et; }
+  });
+  const minerNet  = ordered.map(w => w.house_miners?.alpha_net || 0);
+  const minerBurn = ordered.map(w => w.house_miners?.alpha_burned || 0);
+  const valAlpha  = ordered.map(w => w.house_validators?.alpha || 0);
+  const ownerAlpha = ordered.map(w => w.owner_key?.alpha || 0);
+
+  const ctx = document.getElementById('chartHouseWeekly').getContext('2d');
+  if (charts['chartHouseWeekly']) charts['chartHouseWeekly'].destroy();
+  charts['chartHouseWeekly'] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Owner key (18%)', data: ownerAlpha, backgroundColor: 'rgba(245,158,11,0.7)', borderColor: '#F59E0B', borderWidth: 1, stack: 's' },
+        { label: 'House validators', data: valAlpha, backgroundColor: 'rgba(37,99,235,0.7)', borderColor: '#2563EB', borderWidth: 1, stack: 's' },
+        { label: 'House miners (net)', data: minerNet, backgroundColor: 'rgba(16,185,129,0.75)', borderColor: '#10b981', borderWidth: 1, stack: 's' },
+        { label: 'House miners (burned)', data: minerBurn, backgroundColor: 'rgba(239,68,68,0.25)', borderColor: 'rgba(239,68,68,0.5)', borderWidth: 1, stack: 's' },
+      ],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      plugins: {
+        ...CHART_DEFAULTS.plugins,
+        legend: {
+          display: true,
+          labels: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 }, boxWidth: 12, padding: 10 }
+        },
+      },
+      scales: {
+        x: { ...CHART_DEFAULTS.scales.x, stacked: true },
+        y: { ...CHART_DEFAULTS.scales.y, stacked: true },
+      },
+    },
+  });
+}
+
+async function triggerHouseSnapshot() {
+  try {
+    const r = await fetch('/api/house/snapshot', { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) { alert('House snapshot failed (' + r.status + ')'); return; }
+    await loadHouseWeekly();
+  } catch (e) { alert(e); }
 }
 
 async function loadSummary() {
@@ -990,11 +1235,14 @@ async function triggerCollect() {
     const taoRes = await _post('/api/taostats/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
     await sleep(300);
     const subRes = await _post('/api/subnet/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
+    await sleep(300);
+    const houseRes = await _post('/api/house/snapshot').catch(e => ({ ok: false, body: { detail: String(e) } }));
 
     const failures = [];
     if (!collectRes.ok) failures.push('collect: ' + (collectRes.body?.detail || collectRes.status));
     if (!taoRes.ok)     failures.push('taostats: ' + (taoRes.body?.detail || taoRes.status));
     if (!subRes.ok)     failures.push('subnet: ' + (subRes.body?.detail || subRes.status));
+    if (!houseRes.ok)   failures.push('house snapshot: ' + (houseRes.body?.detail || houseRes.status));
 
     if (failures.length) {
       alert('Some refreshes failed:\n' + failures.join('\n'));
@@ -1027,6 +1275,7 @@ async function init() {
   if (!summary) return;
   const history = await loadHistory();
   buildCharts(history);
+  await loadHouseWeekly();
   await loadUids();
 }
 
@@ -1258,6 +1507,9 @@ async function loadNeuronsTab() {
     // Subnet header cards
     const sub = d.submitting_in_window || {};
     const t = d.totals || {};
+    const burn = d.burn || {};
+    const burnRate = burn.rate;
+    const burnLabel = burnRate != null ? (burnRate * 100).toFixed(1) + '%' : '—';
     const headerCards = [
       {
         label: 'Window · ' + (w.current_kind || '—').toUpperCase(),
@@ -1270,19 +1522,20 @@ async function loadNeuronsTab() {
         accent: w.current_kind === 'validation' ? '#10b981' : '#F59E0B',
       },
       {
-        label: 'Validators with permit',
-        value: fmtInt(t.validators),
+        label: 'House Validators',
+        value: fmtInt(t.house_validators) + ' / ' + fmtInt(t.validators),
         unit: '',
         delta: '',
-        sub: 'Submitting in window: ' + fmtInt(sub.validators),
+        sub: 'Submitting in window: ' + fmtInt(sub.house_validators ?? 0) + ' (house) · ' + fmtInt(sub.validators ?? 0) + ' (all)',
         accent: '#2563EB',
       },
       {
-        label: 'Miner UIDs',
-        value: fmtInt(t.miners),
+        label: 'House Miners',
+        value: fmtInt(t.house_miners) + ' / ' + fmtInt(t.miners),
         unit: '',
         delta: '',
-        sub: 'Submitting in window: ' + fmtInt(sub.miners) + ' · burn 100% (gross = burned)',
+        sub: 'Submitting in window: ' + fmtInt(sub.house_miners ?? 0) + ' (house) · burn ' + burnLabel
+          + (burnRate != null && burnRate >= 1 ? ' (gross = burned)' : ''),
         accent: '#EF4444',
       },
     ];
@@ -1295,39 +1548,96 @@ async function loadNeuronsTab() {
       </div>
     `).join('');
 
-    // Validators table
-    valEl.innerHTML = renderValidatorsTable(d.validators || [], w);
-    minerEl.innerHTML = renderMinersTable(d.miners || [], w);
+    // Validators / miners tables (filter applied)
+    _neuronsCache = { validators: d.validators || [], miners: d.miners || [], window: w };
+    renderNeuronsTables();
   } catch (e) {
     headerEl.innerHTML = `<div class="no-data"><strong>Failed to load neurons</strong><span>${e}</span></div>`;
   }
 }
 
+let _neuronsCache = { validators: [], miners: [], window: {} };
+let _houseFilter = 'all';
+
+function applyHouseFilter(rows) {
+  if (_houseFilter === 'house') return rows.filter(r => r.is_house);
+  if (_houseFilter === 'other') return rows.filter(r => !r.is_house);
+  return rows;
+}
+
+function renderNeuronsTables() {
+  document.getElementById('validatorsTable').innerHTML =
+    renderValidatorsTable(applyHouseFilter(_neuronsCache.validators), _neuronsCache.window);
+  document.getElementById('minersTable').innerHTML =
+    renderMinersTable(applyHouseFilter(_neuronsCache.miners), _neuronsCache.window);
+}
+
+function houseToggleHtml(row) {
+  const cold = row.coldkey || '';
+  const hot  = row.hotkey  || '';
+  const star = row.is_house ? '★' : '☆';
+  const cls  = row.is_house ? 'house-toggle is-house' : 'house-toggle';
+  const title = row.is_house
+    ? 'Click to remove House label'
+    : 'Click to mark as House (labels coldkey)';
+  return `<button class="${cls}" title="${title}"
+    onclick="toggleHouse('${cold}','${hot}', ${row.is_house ? 'true' : 'false'})">${star}</button>`;
+}
+
+async function toggleHouse(coldkey, hotkey, isHouse) {
+  try {
+    if (isHouse) {
+      // Remove labels for both keys (best-effort).
+      if (coldkey) await fetch('/api/labels/' + encodeURIComponent(coldkey), { method: 'DELETE', credentials: 'same-origin' });
+      if (hotkey)  await fetch('/api/labels/' + encodeURIComponent(hotkey),  { method: 'DELETE', credentials: 'same-origin' });
+    } else if (coldkey) {
+      await fetch('/api/labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ss58: coldkey, kind: 'coldkey', note: 'tagged from dashboard' }),
+        credentials: 'same-origin',
+      });
+    } else if (hotkey) {
+      await fetch('/api/labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ss58: hotkey, kind: 'hotkey', note: 'tagged from dashboard' }),
+        credentials: 'same-origin',
+      });
+    }
+    // Reload the neurons tab so flags propagate (incl. burn aggregates).
+    _tabLoaded.neurons = false;
+    activateTab('neurons');
+  } catch (e) { alert('House toggle failed: ' + e); }
+}
+
 function renderValidatorsTable(rows, w) {
   if (!rows.length) return '<div class="no-data"><span>No validators</span></div>';
   const relevant = w.current_kind === 'validation';
+  const houseCount = rows.filter(r => r.is_house).length;
   return `
     <div class="table-header">
       <span class="table-title">Validators</span>
-      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${rows.length} with permit</span>
+      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${rows.length} shown · ${houseCount} House</span>
     </div>
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>UID</th><th>Stake α</th><th>Daily validating α</th><th>Daily reward τ</th>
+          <th>House</th><th>UID</th><th>Stake α</th><th>Daily validating α</th><th>Daily reward τ</th>
           <th>Dividends</th><th>Updated</th><th>Submitting</th><th>Hotkey</th>
         </tr></thead>
         <tbody>
           ${rows.map(v => `
             <tr>
-              <td class="uid">${v.uid}${v.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}</td>
+              <td>${houseToggleHtml(v)}</td>
+              <td class="uid">${v.uid}${v.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${v.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}</td>
               <td class="mono">${fmtAlpha(v.total_alpha_stake, 2)}</td>
               <td class="em">${fmtAlpha(v.daily_validating_alpha, 4)}</td>
               <td class="mono">${fmtAlpha(v.daily_reward_tao, 4)}</td>
               <td class="mono">${fmtPct((v.dividends || 0) * 100, 2)}%</td>
               <td class="mono" title="block ${v.last_update_block}">${fmtBlocksAgo(v.updated_blocks_ago)}</td>
               <td class="mono">${submittingBadge(v.submitting_in_window, relevant)}</td>
-              <td class="mono" style="color:var(--muted)">${v.hotkey_short || ''}</td>
+              <td class="mono" style="color:var(--muted)" title="${v.hotkey || ''}">${v.hotkey_short || ''}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -1338,17 +1648,23 @@ function renderValidatorsTable(rows, w) {
 function renderMinersTable(rows, w) {
   if (!rows.length) return '<div class="no-data"><span>No miners</span></div>';
   const relevant = w.current_kind === 'mining';
-  // Show only UIDs with non-zero incentive OR an axon serving (active miners), keep top 50 by incentive
-  const filtered = rows.filter(m => (m.incentive || 0) > 0 || m.axon_ip || m.is_owner_hotkey).slice(0, 60);
+  // Show House rows always; for non-House show only UIDs with non-zero incentive
+  // OR an axon serving OR the owner hotkey, keep top 60 of the non-house set.
+  const houseRows = rows.filter(m => m.is_house);
+  const otherCandidates = rows
+    .filter(m => !m.is_house && ((m.incentive || 0) > 0 || m.axon_ip || m.is_owner_hotkey))
+    .slice(0, 60);
+  const filtered = [...houseRows, ...otherCandidates];
+  const houseCount = houseRows.length;
   return `
     <div class="table-header">
       <span class="table-title">Miners</span>
-      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${filtered.length} shown / ${rows.length} total</span>
+      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">${filtered.length} shown · ${houseCount} House · ${rows.length} total</span>
     </div>
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>UID</th><th>Incentive</th>
+          <th>House</th><th>UID</th><th>Incentive</th>
           <th>Mining α (gross)</th><th>Burned α</th><th>Net α</th>
           <th>Updated</th><th>Submitting</th><th>Axon</th><th>Hotkey</th>
         </tr></thead>
@@ -1356,9 +1672,10 @@ function renderMinersTable(rows, w) {
           ${filtered.map(m => {
             const gross = m.daily_mining_alpha || 0;
             const burn = m.daily_burned_alpha || 0;
-            const net = gross - burn;
+            const net = (m.daily_mining_alpha_net != null) ? m.daily_mining_alpha_net : (gross - burn);
             return `<tr>
-              <td class="uid">${m.uid}${m.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${m.is_immunity_period ? ' <span style="color:var(--blue-lt);font-size:0.6rem">IMM</span>' : ''}</td>
+              <td>${houseToggleHtml(m)}</td>
+              <td class="uid">${m.uid}${m.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${m.is_immunity_period ? ' <span style="color:var(--blue-lt);font-size:0.6rem">IMM</span>' : ''}${m.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}</td>
               <td class="em">${fmtPct((m.incentive || 0) * 100, 4)}%</td>
               <td class="mono">${fmtAlpha(gross, 4)}</td>
               <td class="mono" style="color:var(--red)">${fmtAlpha(burn, 4)}</td>
@@ -1366,7 +1683,7 @@ function renderMinersTable(rows, w) {
               <td class="mono" title="block ${m.last_update_block}">${fmtBlocksAgo(m.updated_blocks_ago)}</td>
               <td class="mono">${submittingBadge(m.submitting_in_window, relevant)}</td>
               <td class="mono" style="color:var(--muted)">${m.axon_ip ? m.axon_ip + ':' + m.axon_port : '—'}</td>
-              <td class="mono" style="color:var(--muted)">${m.hotkey_short || ''}</td>
+              <td class="mono" style="color:var(--muted)" title="${m.hotkey || ''}">${m.hotkey_short || ''}</td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -1458,12 +1775,14 @@ async function loadMovementTab() {
         <span class="table-title">Top movers</span>
         <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
           inflows ${fmtAlpha(move.inflows_alpha, 2)} ξ · outflows ${fmtAlpha(move.outflows_alpha, 2)} ξ
+          · House +${fmtAlpha(move.house_inflows_alpha || 0, 2)} / -${fmtAlpha(move.house_outflows_alpha || 0, 2)}
+          · Other +${fmtAlpha(move.other_inflows_alpha || 0, 2)} / -${fmtAlpha(move.other_outflows_alpha || 0, 2)}
         </span>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Hotkey</th><th>Coldkey</th><th>α today</th><th>α yesterday</th>
+            <th>House</th><th>Hotkey</th><th>Coldkey</th><th>α today</th><th>α yesterday</th>
             <th>Δ α</th><th>Δ τ-equiv</th><th>Status</th>
           </tr></thead>
           <tbody>
@@ -1473,7 +1792,9 @@ async function loadMovementTab() {
                 : m.is_exited ? '<span style="color:var(--red)">EXITED</span>'
                 : (m.alpha_delta > 0 ? '<span style="color:var(--green)">BOUGHT</span>'
                    : '<span style="color:var(--red)">SOLD</span>');
+              const houseCell = m.is_house ? '<span class="house-chip">HOUSE</span>' : '<span style="color:var(--muted)">—</span>';
               return `<tr>
+                <td>${houseCell}</td>
                 <td class="mono" style="color:var(--text-dim)" title="${m.hotkey || ''}">${m.hotkey_name || (m.hotkey || '').slice(0,12) + '…'}</td>
                 <td class="mono" style="color:var(--muted)" title="${m.coldkey || ''}">${(m.coldkey || '').slice(0,10)}…</td>
                 <td class="mono">${fmtAlpha(m.alpha_now, 4)}</td>
@@ -1518,6 +1839,14 @@ function activateTab(name) {
 
 document.querySelectorAll('.tab-btn').forEach(b => {
   b.addEventListener('click', () => activateTab(b.dataset.tab));
+});
+
+document.querySelectorAll('[data-house-filter]').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('[data-house-filter]').forEach(x => x.classList.toggle('active', x === b));
+    _houseFilter = b.dataset.houseFilter;
+    renderNeuronsTables();
+  });
 });
 
 const initialTab = (location.hash || '').replace('#', '');

@@ -96,3 +96,52 @@ def is_submitting_in_window(
     inside the active window."""
     last_dt_utc = block_to_utc(current_block, current_block_time_utc, last_update_block, block_seconds)
     return last_dt_utc.astimezone(ET) >= window_start_et
+
+
+def weekly_window(now_utc: datetime | None = None) -> tuple[datetime, datetime]:
+    """
+    Full SN21 mining week: Mon 12:00 ET → following Mon 12:00 ET.
+
+    A "weekly epoch" spans the mining window (Mon 12 → Sun 00) plus the
+    validation window (Sun 00 → Mon 12) that immediately follows. Returns
+    (start_et, end_et) covering the week containing `now_utc`.
+    """
+    et = _et_now(now_utc)
+    weekday = et.weekday()
+    hour = et.hour
+
+    # If we're inside the validation tail of a week (Sun all day, or Mon < 12 ET),
+    # the start is the Monday noon two days back / one day back respectively.
+    if weekday == 6:  # Sunday
+        monday_anchor = et - timedelta(days=6)
+    elif weekday == 0 and hour < MINING_START_HOUR:  # Mon morning
+        monday_anchor = et - timedelta(days=7)
+    elif weekday == 0:  # Mon >= 12 ET → start is today
+        monday_anchor = et
+    else:
+        monday_anchor = et - timedelta(days=weekday)
+
+    start = _at(monday_anchor, MINING_START_HOUR)
+    end = start + timedelta(days=7)
+    return (start, end)
+
+
+def previous_weekly_window(n: int = 1, now_utc: datetime | None = None) -> tuple[datetime, datetime]:
+    """Return the weekly window `n` weeks before the current one."""
+    start, end = weekly_window(now_utc)
+    return (start - timedelta(days=7 * n), end - timedelta(days=7 * n))
+
+
+def date_in_weekly_window(date_str: str, start_et: datetime, end_et: datetime) -> bool:
+    """
+    Whether a YYYY-MM-DD logical date (UTC calendar) overlaps a weekly window.
+    Uses noon UTC as a representative timestamp for the day.
+    """
+    try:
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d").replace(
+            hour=12, tzinfo=timezone.utc
+        )
+    except ValueError:
+        return False
+    d_et = d.astimezone(ET)
+    return start_et <= d_et < end_et

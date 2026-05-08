@@ -23,6 +23,7 @@ import requests
 
 from collector import save_json, load_json
 from config import DATA_DIR
+from labels import house_set, is_house
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,7 @@ def _diff_snapshots(today: dict[str, Any], prior: dict[str, Any] | None) -> list
     today_map = {_key(h): h for h in today.get("holders", [])}
     prior_map = {_key(h): h for h in (prior or {}).get("holders", [])} if prior else {}
 
+    house = house_set()
     out: list[dict[str, Any]] = []
     keys = set(today_map.keys()) | set(prior_map.keys())
     for k in keys:
@@ -174,11 +176,14 @@ def _diff_snapshots(today: dict[str, Any], prior: dict[str, Any] | None) -> list
         delta_rao = balance_now - balance_prev
         balance_as_tao_now = _to_int((t or {}).get("balance_as_tao_rao"))
         balance_as_tao_prev = _to_int((p or {}).get("balance_as_tao_rao"))
+        hotkey = (t or p or {}).get("hotkey")
+        coldkey = (t or p or {}).get("coldkey")
         out.append(
             {
-                "hotkey": (t or p or {}).get("hotkey"),
+                "hotkey": hotkey,
                 "hotkey_name": (t or p or {}).get("hotkey_name"),
-                "coldkey": (t or p or {}).get("coldkey"),
+                "coldkey": coldkey,
+                "is_house": is_house(coldkey, hotkey, house=house),
                 "alpha_now": balance_now / RAO_PER_TAO,
                 "alpha_prev": balance_prev / RAO_PER_TAO,
                 "alpha_delta": delta_rao / RAO_PER_TAO,
@@ -207,6 +212,12 @@ def get_movement(limit: int = 50) -> dict[str, Any]:
 
     inflows_alpha = sum(r["alpha_delta"] for r in diff if r["alpha_delta"] > 0)
     outflows_alpha = sum(-r["alpha_delta"] for r in diff if r["alpha_delta"] < 0)
+    house_inflows_alpha = sum(
+        r["alpha_delta"] for r in diff if r["alpha_delta"] > 0 and r.get("is_house")
+    )
+    house_outflows_alpha = sum(
+        -r["alpha_delta"] for r in diff if r["alpha_delta"] < 0 and r.get("is_house")
+    )
     new_positions = sum(1 for r in diff if r["is_new"])
     exited_positions = sum(1 for r in diff if r["is_exited"])
 
@@ -219,6 +230,10 @@ def get_movement(limit: int = 50) -> dict[str, Any]:
         "exited_positions": exited_positions,
         "inflows_alpha": round(inflows_alpha, 6),
         "outflows_alpha": round(outflows_alpha, 6),
+        "house_inflows_alpha": round(house_inflows_alpha, 6),
+        "house_outflows_alpha": round(house_outflows_alpha, 6),
+        "other_inflows_alpha": round(inflows_alpha - house_inflows_alpha, 6),
+        "other_outflows_alpha": round(outflows_alpha - house_outflows_alpha, 6),
         "movers": movers,
     }
 

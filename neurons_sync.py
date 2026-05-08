@@ -23,6 +23,7 @@ from typing import Any
 
 import requests
 
+from labels import auto_label_owner_hotkey, house_set, is_house
 from windows import current_window, is_submitting_in_window, ET
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ def _normalise_row(
     current_block: int | None,
     current_block_time: datetime | None,
     window_start_et: datetime | None,
+    house: set[str] | None = None,
 ) -> dict[str, Any]:
     hotkey = _ss58(r.get("hotkey"))
     coldkey = _ss58(r.get("coldkey"))
@@ -146,12 +148,20 @@ def _normalise_row(
             submitting = None
 
     axon = r.get("axon") or {}
+    daily_mining_alpha = _rao_to_tao(r.get("daily_mining_alpha"))
+    daily_burned_alpha = _rao_to_tao(r.get("daily_burned_alpha"))
+    daily_mining_alpha_net = (
+        round((daily_mining_alpha or 0.0) - (daily_burned_alpha or 0.0), 9)
+        if (daily_mining_alpha is not None or daily_burned_alpha is not None)
+        else None
+    )
     return {
         "uid": r.get("uid"),
         "hotkey": hotkey,
         "hotkey_short": _short(hotkey),
         "coldkey": coldkey,
         "coldkey_short": _short(coldkey),
+        "is_house": is_house(coldkey, hotkey, house=house),
         "validator_permit": bool(r.get("validator_permit")),
         "active": bool(r.get("active")),
         "is_owner_hotkey": bool(r.get("is_owner_hotkey")),
@@ -170,10 +180,11 @@ def _normalise_row(
         "total_alpha_stake": _rao_to_tao(r.get("total_alpha_stake")),
         "emission_alpha_per_tempo": _rao_to_tao(r.get("emission")),
         "daily_reward_tao": _rao_to_tao(r.get("daily_reward")),
-        "daily_mining_alpha": _rao_to_tao(r.get("daily_mining_alpha")),
+        "daily_mining_alpha": daily_mining_alpha,
+        "daily_mining_alpha_net": daily_mining_alpha_net,
         "daily_mining_alpha_as_tao": _rao_to_tao(r.get("daily_mining_alpha_as_tao")),
         "daily_mining_tao": _rao_to_tao(r.get("daily_mining_tao")),
-        "daily_burned_alpha": _rao_to_tao(r.get("daily_burned_alpha")),
+        "daily_burned_alpha": daily_burned_alpha,
         "daily_burned_alpha_as_tao": _rao_to_tao(r.get("daily_burned_alpha_as_tao")),
         "daily_validating_alpha": _rao_to_tao(r.get("daily_validating_alpha")),
         "daily_validating_alpha_as_tao": _rao_to_tao(r.get("daily_validating_alpha_as_tao")),
@@ -209,6 +220,12 @@ def fetch_neurons() -> dict[str, Any]:
 
     rows, block_number, timestamp = _fetch_all_uids(session)
 
+    # Auto-label the SN21 owner hotkey as House on first sight.
+    for r in rows:
+        if r.get("is_owner_hotkey"):
+            auto_label_owner_hotkey(_ss58(r.get("hotkey")))
+            break
+
     current_block_time = None
     if timestamp:
         try:
@@ -220,8 +237,10 @@ def fetch_neurons() -> dict[str, Any]:
     win_start_et = win_start
     win_end_et = win_end
 
+    house = house_set()
     normalised = [
-        _normalise_row(r, block_number, current_block_time, win_start_et) for r in rows
+        _normalise_row(r, block_number, current_block_time, win_start_et, house=house)
+        for r in rows
     ]
 
     validators = [n for n in normalised if n["validator_permit"]]
@@ -236,6 +255,17 @@ def fetch_neurons() -> dict[str, Any]:
     submitters_validators = sum(1 for v in validators if v.get("submitting_in_window"))
     submitters_miners = sum(1 for m in miners if m.get("submitting_in_window"))
 
+    house_validators = [v for v in validators if v.get("is_house")]
+    house_miners = [m for m in miners if m.get("is_house")]
+
+    # Subnet-wide burn ratio from the latest snapshot (1.0 = 100% burn).
+    total_mining_alpha = sum((m.get("daily_mining_alpha") or 0.0) for m in miners)
+    total_burned_alpha = sum((m.get("daily_burned_alpha") or 0.0) for m in miners)
+    burn_rate = (
+        round(total_burned_alpha / total_mining_alpha, 6)
+        if total_mining_alpha > 0 else None
+    )
+
     payload = {
         "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
         "block_number": block_number,
@@ -246,6 +276,10 @@ def fetch_neurons() -> dict[str, Any]:
             "miners": len(miners),
             "active_validators": sum(1 for v in validators if v.get("active")),
             "active_miners": sum(1 for m in miners if m.get("active")),
+            "house_validators": len(house_validators),
+            "house_miners": len(house_miners),
+            "house_active_validators": sum(1 for v in house_validators if v.get("active")),
+            "house_active_miners": sum(1 for m in house_miners if m.get("active")),
         },
         "window": {
             "current_kind": kind,
@@ -258,6 +292,14 @@ def fetch_neurons() -> dict[str, Any]:
         "submitting_in_window": {
             "validators": submitters_validators,
             "miners": submitters_miners,
+            "house_validators": sum(1 for v in house_validators if v.get("submitting_in_window")),
+            "house_miners": sum(1 for m in house_miners if m.get("submitting_in_window")),
+        },
+        "burn": {
+            "rate": burn_rate,
+            "total_mining_alpha_gross": round(total_mining_alpha, 9),
+            "total_mining_alpha_burned": round(total_burned_alpha, 9),
+            "total_mining_alpha_net": round(total_mining_alpha - total_burned_alpha, 9),
         },
         "validators": validators,
         "miners": miners,
