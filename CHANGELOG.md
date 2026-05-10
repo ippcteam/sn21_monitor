@@ -2,6 +2,45 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-05-10 — Daily digest (Telegram, LLM-narrated)
+
+### Added
+- **`digest/` package** — pluggable daily digest pipeline. One
+  `DigestConfig` per registered digest; the orchestrator (`run_digest`)
+  runs `gather → compose → send` with per-digest idempotency state on
+  disk (`digest_state_<kind>.json`) and a `force` bypass for manual
+  re-runs.
+- **`digest/sources/sn21_daily.py`** — pure-read source. Pulls from
+  `subnet_daily.json`, `holders_snapshots.json`,
+  `taostats_owner_transfers.json`, `daily_log.json`, `neurons_daily.json`
+  and produces a structured inputs dict (price, pool, movers, owner
+  pool, burn, emissions, tier, anomaly flags). Tags validator-brand
+  exits (Taostats / tao.bot / 1T1B / Datura / OTF / Polychain / Crucible / Yuma).
+- **`digest/composers/llm.py`** — Claude Haiku 4.5 via the Anthropic
+  Python SDK. System + user prompt split on `---` in the markdown
+  template (`digest/prompts/sn21_daily.md`).
+- **`digest/composers/fallback.py`** — deterministic markdown output
+  used if the LLM key is missing or the call errors. Tagged `[fallback]`
+  in the message so the operator knows which path produced it.
+- **`digest/channels/telegram.py`** — Bot API `sendMessage`. Plain text,
+  no parse_mode escaping, web-page-preview disabled.
+- **`POST /api/digest/preview?kind=sn21_daily`** — composes and returns
+  the message + structured inputs without sending.
+- **`POST /api/digest/send?kind=sn21_daily&force=1`** — composes and
+  sends now. `force=1` bypasses the same-day idempotency guard.
+- **Scheduled job 09:30 UTC** (override via `DIGEST_TIME_UTC=HH:MM`) —
+  fires after all syncs complete.
+
+### New env vars
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — Telegram bot channel.
+- `ANTHROPIC_API_KEY` — LLM composer; missing key → fallback path.
+- `DIGEST_ENABLED` (default `true`) — kill switch.
+- `DIGEST_TIME_UTC` (default `09:30`) — schedule override.
+- `DIGEST_LLM_MODEL` (default Haiku 4.5), `DIGEST_LLM_MAX_TOKENS` (default 1024).
+
+### Dependencies
+- `anthropic>=0.40.0` added to `requirements.txt`.
+
 ## 2026-05-08 — House labels + burn-aware weekly earnings + holders sync hardening
 
 ### Added

@@ -13,3 +13,5 @@ requests==2.32.3
 certifi>=2024.0.0
 python-dateutil>=2.8.0
 python-dotenv>=1.0.0
+# Daily digest LLM composer (Claude Haiku via Anthropic API)
+anthropic>=0.40.0

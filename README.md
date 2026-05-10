@@ -77,8 +77,29 @@ non-100% epoch on the dashboard.
 ├── subnet_daily.json           — daily pool/holders rows for Activity tab (365d)
 ├── holders_snapshots.json      — last 7 daily holder snapshots (~1968 rows each)
 ├── neurons_daily.json          — last 90 days of per-UID earnings rows
-└── wallet_labels.json          — House vs Other label store
+├── wallet_labels.json          — House vs Other label store
+└── digest_state_<kind>.json    — per-digest idempotency state (last_sent_date, etc.)
 ```
+
+## Daily digest
+
+Pluggable digest pipeline under `digest/` — gather (source) → compose (LLM
+or fallback) → send (channel). One config registered today: `sn21_daily`,
+posted to Telegram at 09:30 UTC after all syncs complete.
+
+```
+digest/
+├── core.py                     — DigestConfig, run_digest()
+├── channels/telegram.py        — POST sendMessage
+├── composers/llm.py            — Claude Haiku via Anthropic API
+├── composers/fallback.py       — deterministic markdown if LLM unavailable
+├── sources/sn21_daily.py       — reads JSON stores, returns structured inputs
+└── prompts/sn21_daily.md       — system + user prompt template
+```
+
+Adding a new digest = drop a source module, add a prompt, append a
+`DigestConfig` in `app.py`. See `.env.example` for required env vars
+(Telegram bot + Anthropic key).
 
 ## Scheduled jobs (UTC)
 
@@ -89,6 +110,7 @@ non-100% epoch on the dashboard.
 | Subnet daily sync (Activity tab data) | 08:30 | `subnet_sync.sync_subnet_daily` |
 | Holders snapshot (Movement tab data) | 08:45 | `holders_sync.sync_holders_snapshot` |
 | Neurons per-UID daily snapshot (House weekly data) | 09:00 | `neurons_daily_sync.sync_neurons_daily` |
+| Daily digest (Telegram) | 09:30 (override via `DIGEST_TIME_UTC`) | `digest.run_digest` |
 | Tier-boundary log marker | one-off at each tier flip date | `app.log_tier_boundary` |
 
 Holders sync now self-schedules **one retry 30 min later** if Taostats 429s
@@ -123,6 +145,8 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `DELETE /api/labels/{ss58}` — remove House label
 - `POST /api/backfill` — long-running chain backfill (archive subtensor)
 - `POST /api/import-data` — upload `daily_log.json` / `owner_ledger.json` (header-key auth)
+- `POST /api/digest/preview?kind=sn21_daily` — compose digest, return text + inputs (no send)
+- `POST /api/digest/send?kind=sn21_daily&force=1` — compose + send via Telegram now
 
 The topbar **Refresh** button fans out collect → taostats → subnet → house-snapshot
 sequentially with 300 ms gaps. Holders snapshot is intentionally excluded
@@ -153,6 +177,13 @@ HOUSE_HOTKEYS=…,…
 
 # Burn flip — informational (dashboard surfaces until live burn drops below 100%)
 BURN_FLIP_DATE=
+
+# Daily digest (Telegram + Claude Haiku)
+DIGEST_ENABLED=true
+DIGEST_TIME_UTC=09:30
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+ANTHROPIC_API_KEY=
 ```
 
 ## Local dev

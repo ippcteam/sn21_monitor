@@ -20,6 +20,9 @@ from apscheduler.triggers.date import DateTrigger
 
 from collector import migrate_and_rebuild_from_logs, save_json
 from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
+from digest.core import DigestConfig, run_digest
+from digest.channels import telegram as telegram_channel
+from digest.sources import sn21_daily as sn21_daily_source
 from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
 from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
@@ -637,6 +640,69 @@ def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
 
+# ── Digest configs ────────────────────────────────────────────────────────────
+
+def _digest_time_utc() -> tuple[int, int]:
+    """Override default 09:30 UTC via DIGEST_TIME_UTC=HH:MM."""
+    raw = (os.environ.get("DIGEST_TIME_UTC") or "").strip()
+    if not raw:
+        return (9, 30)
+    try:
+        hh, mm = raw.split(":", 1)
+        return (max(0, min(23, int(hh))), max(0, min(59, int(mm))))
+    except (ValueError, AttributeError):
+        logger.warning("Bad DIGEST_TIME_UTC=%r — using 09:30", raw)
+        return (9, 30)
+
+
+_PROMPTS_DIR = Path(__file__).resolve().parent / "digest" / "prompts"
+
+DIGESTS: dict[str, DigestConfig] = {
+    "sn21_daily": DigestConfig(
+        kind="sn21_daily",
+        gather=sn21_daily_source.gather,
+        prompt_path=_PROMPTS_DIR / "sn21_daily.md",
+        channel_send=telegram_channel.send,
+        schedule_cron=_digest_time_utc(),
+        state_filename="digest_state_sn21.json",
+        title="SN21 Daily",
+    ),
+}
+
+
+def scheduled_digest(kind: str) -> None:
+    cfg = DIGESTS.get(kind)
+    if cfg is None:
+        logger.warning("Scheduled digest %s: no config registered", kind)
+        return
+    try:
+        run_digest(cfg, force=False, dry_run=False)
+    except Exception:
+        logger.exception("Scheduled digest %s failed", kind)
+
+
+@app.post("/api/digest/preview")
+async def api_digest_preview(kind: str = "sn21_daily", _=Depends(require_auth)):
+    """Compose the digest but DO NOT send. Returns markdown + structured inputs."""
+    cfg = DIGESTS.get(kind)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"Unknown digest kind: {kind}")
+    return run_digest(cfg, force=True, dry_run=True)
+
+
+@app.post("/api/digest/send")
+async def api_digest_send(
+    kind: str = "sn21_daily",
+    force: bool = False,
+    _=Depends(require_auth),
+):
+    """Compose and send now. ?force=1 bypasses the same-day idempotency guard."""
+    cfg = DIGESTS.get(kind)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"Unknown digest kind: {kind}")
+    return run_digest(cfg, force=force, dry_run=False)
+
+
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(
     scheduled_collection,
@@ -668,6 +734,15 @@ scheduler.add_job(
     id="daily_neurons_snapshot",
     replace_existing=True,
 )
+for _kind, _cfg in DIGESTS.items():
+    _h, _m = _cfg.schedule_cron
+    scheduler.add_job(
+        scheduled_digest,
+        CronTrigger(hour=_h, minute=_m),
+        args=[_kind],
+        id=f"daily_digest_{_kind}",
+        replace_existing=True,
+    )
 
 
 @app.on_event("startup")
@@ -689,9 +764,13 @@ async def startup():
             )
 
     scheduler.start()
+    digest_lines = [
+        f"{k} {cfg.schedule_cron[0]:02d}:{cfg.schedule_cron[1]:02d}"
+        for k, cfg in DIGESTS.items()
+    ]
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00 UTC; tier boundaries)",
-        DATA_DIR,
+        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00 UTC; digests: %s; tier boundaries)",
+        DATA_DIR, ", ".join(digest_lines) or "none",
     )
 
 
