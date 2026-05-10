@@ -665,6 +665,8 @@ DIGESTS: dict[str, DigestConfig] = {
         channel_send=telegram_channel.send,
         schedule_cron=_digest_time_utc(),
         state_filename="digest_state_sn21.json",
+        archive_filename="digest_archive_sn21.json",
+        archive_retention_days=30,
         title="SN21 Daily",
     ),
 }

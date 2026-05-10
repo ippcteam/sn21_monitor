@@ -44,7 +44,8 @@ def _fmt_price(v: Any) -> str:
         return "—"
 
 
-def compose(inputs: dict[str, Any], title: str) -> str:
+def compose(inputs: dict[str, Any], title: str,
+            prior_digests: list[dict[str, Any]] | None = None) -> str:
     lines: list[str] = []
     date = inputs.get("date") or "today"
     lines.append(f"{title} · {date}")
@@ -134,6 +135,51 @@ def compose(inputs: dict[str, Any], title: str) -> str:
                 f"24h Δ: {_fmt_pct(owner.get('balance_change_24h_pct'))}"
             )
 
+    # Trends — 7d / 30d for the metrics that matter
+    trends = inputs.get("trends") or {}
+    if trends:
+        lines.append("")
+        lines.append("TRENDS · 7D / 30D")
+        for label, key, places in [
+            ("alpha price τ", "alpha_price_tao", 6),
+            ("TAO USD", "tao_price_usd", 2),
+            ("holders", "holder_count", 0),
+            ("liquidity τ", "liquidity_tao", 2),
+            ("burn rate %", "burn_rate_pct", 2),
+            ("our entitled α", "our_entitled_alpha", 4),
+        ]:
+            t = trends.get(key) or {}
+            today = t.get("today")
+            if today is None:
+                continue
+            lines.append(
+                f"  {label:<14} {_fmt_num(today, places)}   "
+                f"7d {_fmt_pct(t.get('7d_pct'))}   30d {_fmt_pct(t.get('30d_pct'))}"
+            )
+
+    # Multi-window movers
+    for w_key, w_label in [("movers_7d", "MOVERS · 7D"), ("movers_30d", "MOVERS · 30D")]:
+        w = inputs.get(w_key) or {}
+        top = (w.get("top") or [])[:5]
+        if not top:
+            continue
+        actual = w.get("actual_days")
+        suffix = f" (since {w.get('from_date') or '—'}, ~{actual}d)"
+        lines.append("")
+        lines.append(f"{w_label}{suffix}")
+        for r in top:
+            sign = "+" if r.get("alpha_delta", 0) >= 0 else "−"
+            mag = _fmt_alpha(abs(r.get("alpha_delta") or 0))
+            ck = (r.get("coldkey") or "")[:10]
+            names = ", ".join((r.get("hotkey_names") or [])[:2]) or ck + "…"
+            tags = []
+            if r.get("is_house"): tags.append("house")
+            if r.get("is_new"): tags.append("NEW")
+            if r.get("is_exited"): tags.append("EXITED")
+            if r.get("brand"): tags.append(r["brand"])
+            tag_str = f"  [{', '.join(tags)}]" if tags else ""
+            lines.append(f"  {sign} {mag} α  {names}{tag_str}")
+
     # Burn / emissions
     burn = inputs.get("burn") or {}
     if burn:
@@ -172,6 +218,14 @@ def compose(inputs: dict[str, Any], title: str) -> str:
     if stale:
         lines.append("")
         lines.append(f"NOTE: stale data — {', '.join(stale)}")
+
+    # Prior-digest pointer (memory). The fallback can't synthesize across days,
+    # but it can at least name the dates it has on file.
+    if prior_digests:
+        dates = [e.get("date") for e in prior_digests if e.get("date")]
+        if dates:
+            lines.append("")
+            lines.append(f"MEMORY: {len(dates)} prior digest(s) on file — {dates[0]} → {dates[-1]}")
 
     return "\n".join(lines).strip()
 

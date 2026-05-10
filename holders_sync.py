@@ -32,7 +32,9 @@ STAKE_BALANCE_LATEST_PATH = "/api/dtao/stake_balance/latest/v1"
 NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 200
-SNAPSHOT_RETENTION = 7
+# Retain ~31 days so the digest can compute 7d and 30d per-coldkey movers.
+# At ~150 KB / snapshot × 31 ≈ 4.6 MB on the 1 GB Render disk.
+SNAPSHOT_RETENTION = 31
 INTER_PAGE_SLEEP = 0.8        # default pacing between pages
 LATE_PAGE_THRESHOLD = 4       # pages > this get extra pacing
 LATE_PAGE_SLEEP = 2.0         # Taostats reliably 429s page 6 — slow that ramp

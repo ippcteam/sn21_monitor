@@ -78,7 +78,8 @@ non-100% epoch on the dashboard.
 ├── holders_snapshots.json      — last 7 daily holder snapshots (~1968 rows each)
 ├── neurons_daily.json          — last 90 days of per-UID earnings rows
 ├── wallet_labels.json          — House vs Other label store
-└── digest_state_<kind>.json    — per-digest idempotency state (last_sent_date, etc.)
+├── digest_state_<kind>.json    — per-digest idempotency state (last_sent_date, etc.)
+└── digest_archive_<kind>.json  — per-digest memory (last 30 sent texts; LLM context)
 ```
 
 ## Daily digest
@@ -100,6 +101,20 @@ digest/
 Adding a new digest = drop a source module, add a prompt, append a
 `DigestConfig` in `app.py`. See `.env.example` for required env vars
 (Telegram bot + Anthropic key).
+
+**Memory.** Each digest's last 30 sent texts persist in
+`digest_archive_<kind>.json`. On every compose the prior days (excluding
+today) are passed to the LLM as a `=== PRIOR DIGESTS ===` block so it
+can spot continuity, repetition, and trend reversals — capped by
+`DIGEST_LLM_MEMORY_CHARS` (default 10 000). The prompt instructs the
+model to trust today's data over memory on any conflict.
+
+**Trend windows.** The SN21 source exposes 7d and 30d deltas for every
+metric (`trends`) and per-coldkey top-10 movers per window
+(`movers_7d`, `movers_30d`). The 30-day per-coldkey window relies on
+the holders-snapshot retention (now 31). Until that retention fills,
+the window reports `actual_days < 30` honestly and falls back to the
+oldest available snapshot.
 
 ## Scheduled jobs (UTC)
 

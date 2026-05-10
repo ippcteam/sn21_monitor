@@ -4,11 +4,18 @@ returns a structured `inputs` dict for the composer to narrate.
 
 Reads:
   - subnet_daily.json     — pool / price / depth (Activity tab data)
-  - holders_snapshots.json — last 2 snapshots for 24h movers (Movement tab)
+  - holders_snapshots.json — up to 31 snapshots for 24h/7d/30d movers
   - taostats_owner_transfers.json — wallet balance + transfers
   - daily_log.json        — chain snapshot, emissions, our entitlement
   - neurons_daily.json    — per-UID daily, burn rate, validator/miner counts
   - wallet_labels.json    — via labels.house_set() for house tagging
+
+Multi-window output:
+  - `movers` (24h, today vs prior, per hotkey×coldkey position)
+  - `movers_7d` (per coldkey aggregate, today vs ~7d ago)
+  - `movers_30d` (per coldkey aggregate, today vs ~30d ago — graceful
+    fallback to oldest snapshot until 30 days of data accumulate)
+  - `trends` (per-metric today / -7d / -30d / pct deltas across all sources)
 """
 
 from __future__ import annotations
@@ -52,6 +59,10 @@ KNOWN_BRANDS = {
 NOTABLE_EXIT_ALPHA = 1000.0
 NOTABLE_EXIT_TAO = 5.0
 
+# Multi-window depth (per-coldkey movers).
+WINDOW_DAYS = (7, 30)
+TOP_MOVERS_PER_WINDOW = 10
+
 
 def _pct(today: float | int | None, prior: float | int | None) -> float | None:
     if today is None or not prior:
@@ -60,6 +71,28 @@ def _pct(today: float | int | None, prior: float | int | None) -> float | None:
         return round((today - prior) / prior * 100, 2)
     except (TypeError, ValueError, ZeroDivisionError):
         return None
+
+
+def _row_at_offset(rows: list[dict], days_ago: int) -> tuple[dict | None, int | None]:
+    """
+    Return (row, actual_days_ago) for the row closest to `days_ago` days
+    behind the latest. Falls back to the oldest available row if the window
+    extends beyond what's stored. Both rows must carry a `date` field.
+    """
+    if not rows:
+        return None, None
+    if days_ago <= 0:
+        return rows[-1], 0
+    if len(rows) <= days_ago:
+        # Use the oldest; report the actual gap for honest labelling.
+        oldest = rows[0]
+        try:
+            today = datetime.fromisoformat(rows[-1]["date"]).date()
+            old = datetime.fromisoformat(oldest["date"]).date()
+            return oldest, max(0, (today - old).days)
+        except Exception:
+            return oldest, len(rows) - 1
+    return rows[-1 - days_ago], days_ago
 
 
 def _label_brand(name: str | None) -> str | None:
@@ -341,6 +374,205 @@ def _emissions_section(daily_log: list[dict]) -> dict:
     }
 
 
+# ── Multi-window trends (7d / 30d) ───────────────────────────────────────────
+
+def _trend_row(rows: list[dict], extractor) -> dict[str, Any]:
+    """
+    Build a {today, d-7, d-30, 7d_pct, 30d_pct, window_actual_days_*}
+    record from a list-of-dicts. `extractor(row)` pulls the metric value.
+    """
+    today_row = rows[-1] if rows else None
+    today = extractor(today_row) if today_row else None
+
+    d7_row, d7_actual = _row_at_offset(rows, 7)
+    d30_row, d30_actual = _row_at_offset(rows, 30)
+    d7 = extractor(d7_row) if d7_row else None
+    d30 = extractor(d30_row) if d30_row else None
+
+    return {
+        "today": today,
+        "d-7": d7,
+        "d-30": d30,
+        "7d_pct": _pct(today, d7),
+        "30d_pct": _pct(today, d30),
+        "7d_actual_days": d7_actual,
+        "30d_actual_days": d30_actual,
+    }
+
+
+def _trends_section(subnet_log: list[dict], daily_log: list[dict],
+                    neurons_daily: list[dict]) -> dict[str, Any]:
+    """Per-metric 7d / 30d trends, drawing from whichever store has the longest history."""
+    out: dict[str, Any] = {}
+
+    # Alpha price τ — from subnet_daily
+    out["alpha_price_tao"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("alpha_price_tao"),
+    )
+    # TAO price USD — try subnet_daily.pool first, then daily_log.subnet
+    out["tao_price_usd"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("tao_price_usd")
+                  or ((r or {}).get("subnet") or {}).get("tao_price_usd"),
+    )
+    if out["tao_price_usd"]["today"] is None:
+        out["tao_price_usd"] = _trend_row(
+            daily_log,
+            lambda r: ((r or {}).get("subnet") or {}).get("tao_price_usd"),
+        )
+
+    # Holder count — from subnet_daily
+    out["holder_count"] = _trend_row(
+        subnet_log,
+        lambda r: (r or {}).get("subnet_total_holders"),
+    )
+
+    # Pool depth + 24h volumes — from subnet_daily
+    out["liquidity_tao"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("liquidity_tao"),
+    )
+    out["alpha_buy_volume_24h"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("alpha_buy_volume_24h"),
+    )
+    out["alpha_sell_volume_24h"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("alpha_sell_volume_24h"),
+    )
+
+    # Burn rate — neurons_daily series, fall back to subnet incentive_burn ×100
+    def _burn_x(r: dict | None) -> float | None:
+        if not r:
+            return None
+        v = r.get("burn_rate_pct")
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        return None
+    out["burn_rate_pct"] = _trend_row(neurons_daily or [], _burn_x)
+
+    # Our entitled alpha — from daily_log
+    out["our_entitled_alpha"] = _trend_row(
+        daily_log,
+        lambda r: ((r or {}).get("subnet") or {}).get("our_entitled_alpha"),
+    )
+    # Owner share alpha (the 18% pool gross)
+    out["owner_share_alpha"] = _trend_row(
+        daily_log,
+        lambda r: ((r or {}).get("subnet") or {}).get("owner_share_alpha"),
+    )
+
+    out["windows"] = {
+        "subnet_daily_rows": len(subnet_log),
+        "daily_log_rows": len(daily_log),
+        "neurons_daily_rows": len(neurons_daily or []),
+    }
+    return out
+
+
+# ── Per-coldkey multi-day movers (7d / 30d) ──────────────────────────────────
+
+def _per_coldkey_balance(snapshot: dict) -> dict[str, dict[str, Any]]:
+    """
+    Aggregate a snapshot to one row per coldkey:
+      {coldkey: {balance_rao, balance_as_tao_rao, positions, hotkey_names, hotkeys}}
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for h in (snapshot or {}).get("holders") or []:
+        ck = h.get("coldkey")
+        if not ck:
+            continue
+        cur = out.setdefault(ck, {
+            "balance_rao": 0,
+            "balance_as_tao_rao": 0,
+            "positions": 0,
+            "hotkey_names": [],
+            "hotkeys": [],
+        })
+        cur["balance_rao"] += int(h.get("balance_rao") or 0)
+        cur["balance_as_tao_rao"] += int(h.get("balance_as_tao_rao") or 0)
+        cur["positions"] += 1
+        if h.get("hotkey_name") and h["hotkey_name"] not in cur["hotkey_names"]:
+            cur["hotkey_names"].append(h["hotkey_name"])
+        if h.get("hotkey") and h["hotkey"] not in cur["hotkeys"]:
+            cur["hotkeys"].append(h["hotkey"])
+    return out
+
+
+def _coldkey_movers_window(snapshots: list[dict], window_days: int,
+                           house: set[str]) -> dict[str, Any]:
+    """
+    Top movers across a window, aggregated per coldkey. Falls back to oldest
+    snapshot if `window_days` exceeds available history; the returned
+    `actual_days` records what was actually used.
+    """
+    if not snapshots:
+        return {"top": [], "actual_days": 0, "from_date": None, "to_date": None,
+                "house_inflows_alpha": 0.0, "house_outflows_alpha": 0.0}
+
+    today_snap = snapshots[-1]
+    start_snap, actual_days = _row_at_offset(snapshots, window_days)
+    if start_snap is None:
+        start_snap = today_snap
+        actual_days = 0
+
+    today_map = _per_coldkey_balance(today_snap)
+    start_map = _per_coldkey_balance(start_snap)
+
+    rows: list[dict[str, Any]] = []
+    house_in = house_out = 0.0
+    for ck in set(today_map) | set(start_map):
+        t = today_map.get(ck) or {}
+        p = start_map.get(ck) or {}
+        bal_now = int(t.get("balance_rao") or 0)
+        bal_prev = int(p.get("balance_rao") or 0)
+        if bal_now == 0 and bal_prev == 0:
+            continue
+        delta = (bal_now - bal_prev) / RAO_PER_TAO
+        delta_tao = (int(t.get("balance_as_tao_rao") or 0)
+                     - int(p.get("balance_as_tao_rao") or 0)) / RAO_PER_TAO
+
+        names = (t.get("hotkey_names") or p.get("hotkey_names") or [])[:3]
+        hotkeys = (t.get("hotkeys") or p.get("hotkeys") or [])
+        is_h = any(hk in house for hk in hotkeys) or (ck in house)
+
+        rows.append({
+            "coldkey": ck,
+            "is_house": is_h,
+            "is_new": ck not in start_map,
+            "is_exited": ck not in today_map,
+            "positions_now": (t.get("positions") or 0),
+            "positions_prev": (p.get("positions") or 0),
+            "alpha_now": round(bal_now / RAO_PER_TAO, 4),
+            "alpha_prev": round(bal_prev / RAO_PER_TAO, 4),
+            "alpha_delta": round(delta, 4),
+            "alpha_as_tao_delta": round(delta_tao, 4),
+            "hotkey_names": names,
+            "brand": _label_brand(" ".join(names) if names else None),
+        })
+
+        if delta > 0:
+            if is_h: house_in += delta
+        elif delta < 0:
+            if is_h: house_out += -delta
+
+    rows.sort(key=lambda r: abs(r["alpha_delta"]), reverse=True)
+
+    return {
+        "top": rows[:TOP_MOVERS_PER_WINDOW],
+        "actual_days": actual_days or 0,
+        "from_date": (start_snap or {}).get("date"),
+        "to_date": (today_snap or {}).get("date"),
+        "house_inflows_alpha": round(house_in, 4),
+        "house_outflows_alpha": round(house_out, 4),
+        "total_movers_considered": len(rows),
+    }
+
+
 # ── Flags / risks the LLM should weight ──────────────────────────────────────
 
 def _flags(price: dict, movers: dict, owner: dict, burn: dict) -> list[str]:
@@ -379,6 +611,7 @@ def gather() -> dict[str, Any]:
     """Pull everything needed for the SN21 daily digest. Pure read; no syncs."""
     subnet_log = load_json(SUBNET_DAILY_STORE, []) or []
     daily_log = load_json(DAILY_LOG, []) or []
+    neurons_daily = load_json(NEURONS_DAILY_STORE, []) or []
 
     price, p_warn = _price_section(subnet_log)
     pool = _pool_section(subnet_log)
@@ -387,6 +620,15 @@ def gather() -> dict[str, Any]:
     burn = _burn_section(subnet_log)
     tier = _tier_section()
     emissions = _emissions_section(daily_log)
+    trends = _trends_section(subnet_log, daily_log, neurons_daily)
+
+    # Multi-window per-coldkey movers (7d, 30d).
+    holders_store = load_json(HOLDERS_STORE, {"snapshots": []}) or {}
+    snapshots = holders_store.get("snapshots") or []
+    house = house_set()
+    window_movers: dict[str, Any] = {}
+    for w in WINDOW_DAYS:
+        window_movers[f"movers_{w}d"] = _coldkey_movers_window(snapshots, w, house)
 
     # If subnet_log carries TAO USD via the daily log fallback, fold it in.
     if price.get("tao_price_usd") is None and daily_log:
@@ -412,7 +654,9 @@ def gather() -> dict[str, Any]:
         "burn": burn,
         "emissions": emissions,
         "tier": tier,
+        "trends": trends,
         "stale_fields": stale,
     }
+    out.update(window_movers)  # movers_7d, movers_30d
     out["flags"] = _flags(price, movers, owner, burn)
     return out

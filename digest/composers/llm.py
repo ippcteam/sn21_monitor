@@ -34,7 +34,8 @@ def _split_prompt(template: str) -> tuple[str, str]:
     return template.strip(), ""
 
 
-def compose(inputs: dict[str, Any], prompt_template: str, title: str) -> str:
+def compose(inputs: dict[str, Any], prompt_template: str, title: str,
+            prior_digests: list[dict[str, Any]] | None = None) -> str:
     api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
@@ -53,10 +54,27 @@ def compose(inputs: dict[str, Any], prompt_template: str, title: str) -> str:
         )
 
     inputs_json = json.dumps(inputs, indent=2, default=str, sort_keys=True)
-    user_msg = (
-        (user_template + "\n\n" if user_template else "")
-        + f"Today's data:\n```json\n{inputs_json}\n```"
-    )
+    user_msg_parts: list[str] = []
+    if user_template:
+        user_msg_parts.append(user_template)
+
+    # Memory: last N digests, oldest first. Cap to keep context tight.
+    if prior_digests:
+        max_memory_chars = int(os.environ.get("DIGEST_LLM_MEMORY_CHARS", "10000"))
+        memory_lines = ["=== PRIOR DIGESTS (oldest first; for continuity only — trust today's data on conflicts) ==="]
+        used = 0
+        # We trust the orchestrator's ordering (chronological); show oldest -> newest.
+        for entry in prior_digests:
+            block = f"\n[{entry.get('date')}]\n{entry.get('text','').strip()}"
+            if used + len(block) > max_memory_chars:
+                memory_lines.append(f"\n[…older entries truncated to keep context tight]")
+                break
+            memory_lines.append(block)
+            used += len(block)
+        user_msg_parts.append("\n".join(memory_lines))
+
+    user_msg_parts.append(f"Today's structured data:\n```json\n{inputs_json}\n```")
+    user_msg = "\n\n".join(user_msg_parts)
 
     client = Anthropic(api_key=api_key)
     resp = client.messages.create(

@@ -2,6 +2,44 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-05-10 — Digest memory + 7d/30d trend windows
+
+### Added
+- **Multi-window trends in `digest/sources/sn21_daily.py`**. Each metric
+  (alpha price, TAO USD, holder count, liquidity, burn rate, our
+  entitled α, daily volumes) now reports `today / -7d / -30d / 7d_pct
+  / 30d_pct`, plus the actual look-back distance so the LLM can caveat
+  short windows honestly.
+- **Per-coldkey top-10 movers for 7d and 30d windows** (`movers_7d`,
+  `movers_30d`). Aggregates across each coldkey's hotkey positions; tags
+  house, NEW, EXITED, and known validator brand. Falls back to the
+  oldest available snapshot until the new 31-day retention has filled.
+- **Digest archive (memory)**. After every successful send, the
+  rendered text is appended to `digest_archive_<kind>.json` (max
+  `archive_retention_days`, default 30). On the next compose, the last
+  N entries (excluding today, capped to ~10 KB by
+  `DIGEST_LLM_MEMORY_CHARS`) are passed to the composer as a `=== PRIOR
+  DIGESTS ===` block so the LLM can spot continuity, repetition, and
+  trend reversals across days.
+- **Composer signature change**: both `digest/composers/llm.py` and
+  `digest/composers/fallback.py` now accept `prior_digests` (optional).
+  Fallback surfaces a `MEMORY: N digests on file` pointer; LLM weaves
+  cross-day context per the updated prompt.
+- **Prompt revision** (`digest/prompts/sn21_daily.md`). New PATTERNS
+  section (only emitted when memory + a real pattern exist), TRENDS
+  section, MOVERS · 7D and MOVERS · 30D sections, and explicit memory
+  rules ("trust today's data on conflicts").
+
+### Changed
+- **`holders_sync.py` retention 7 → 31**. Roughly +4.5 MB on the
+  persistent disk; required for 30-day per-coldkey movers. New entries
+  start accumulating immediately; the 30d window honestly reports
+  `actual_days < 30` until it fills.
+
+### New env var
+- `DIGEST_LLM_MEMORY_CHARS` (default `10000`) — caps the prior-digests
+  block size so the user-message token count stays bounded.
+
 ## 2026-05-10 — Daily digest (Telegram, LLM-narrated)
 
 ### Added

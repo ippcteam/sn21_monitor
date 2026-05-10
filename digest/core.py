@@ -27,10 +27,18 @@ class DigestConfig:
     schedule_cron: tuple[int, int]            # (hour, minute) UTC
     state_filename: str                       # under DATA_DIR
     title: str                                # short human label for fallback header
+    archive_filename: str | None = None       # under DATA_DIR; per-digest history
+    archive_retention_days: int = 30          # cap on archive length
 
     @property
     def state_path(self) -> Path:
         return DATA_DIR / self.state_filename
+
+    @property
+    def archive_path(self) -> Path | None:
+        if not self.archive_filename:
+            return None
+        return DATA_DIR / self.archive_filename
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -48,6 +56,29 @@ def _read_prompt(path: Path) -> str:
     except FileNotFoundError:
         logger.warning("Digest prompt missing at %s — using empty template", path)
         return ""
+
+
+def _load_archive(path: Path | None) -> list[dict[str, Any]]:
+    """Returns the archive list (each item: {date, composer, text}); empty if missing."""
+    if path is None:
+        return []
+    arr = load_json(path, [])
+    if not isinstance(arr, list):
+        return []
+    return arr
+
+
+def _append_archive(path: Path | None, entry: dict[str, Any], retention_days: int) -> None:
+    """Replace any prior entry for the same date; cap to retention_days."""
+    if path is None:
+        return
+    archive = _load_archive(path)
+    archive = [e for e in archive if isinstance(e, dict) and e.get("date") != entry.get("date")]
+    archive.append(entry)
+    archive.sort(key=lambda e: e.get("date") or "")
+    if len(archive) > retention_days:
+        archive = archive[-retention_days:]
+    save_json(path, archive)
 
 
 def run_digest(cfg: DigestConfig, *, force: bool = False, dry_run: bool = False) -> dict[str, Any]:
@@ -81,15 +112,27 @@ def run_digest(cfg: DigestConfig, *, force: bool = False, dry_run: bool = False)
     from .composers import fallback as fallback_composer
 
     prompt_text = _read_prompt(cfg.prompt_path)
+    # Memory: last N digests as continuity context. Exclude any entry for today
+    # (force=True re-runs would otherwise let the model reference its own prior
+    # output for the same date, which is confusing).
+    prior = [e for e in _load_archive(cfg.archive_path) if e.get("date") != today]
+
     composer_used = "llm"
     try:
-        text = llm_composer.compose(inputs=inputs, prompt_template=prompt_text, title=cfg.title)
+        text = llm_composer.compose(
+            inputs=inputs,
+            prompt_template=prompt_text,
+            title=cfg.title,
+            prior_digests=prior,
+        )
         if not text or not text.strip():
             raise RuntimeError("LLM composer returned empty text")
     except Exception as e:
         logger.warning("Digest %s LLM composer failed (%s); using fallback", cfg.kind, e)
         composer_used = "fallback"
-        text = fallback_composer.compose(inputs=inputs, title=cfg.title)
+        text = fallback_composer.compose(
+            inputs=inputs, title=cfg.title, prior_digests=prior,
+        )
         text = "[fallback]\n" + text
 
     # Telegram message cap is 4096 chars; hard-truncate with marker.
@@ -120,7 +163,7 @@ def run_digest(cfg: DigestConfig, *, force: bool = False, dry_run: bool = False)
             "error": str(e),
         }
 
-    # 4. Persist state.
+    # 4. Persist state and append to the archive for future memory.
     state.update(
         last_sent_date=today,
         last_sent_at_utc=datetime.now(timezone.utc).isoformat(),
@@ -128,6 +171,16 @@ def run_digest(cfg: DigestConfig, *, force: bool = False, dry_run: bool = False)
         last_channel_result=send_result,
     )
     _save_state(cfg.state_path, state)
+    _append_archive(
+        cfg.archive_path,
+        {
+            "date": today,
+            "composer": composer_used,
+            "text": text,
+            "sent_at_utc": datetime.now(timezone.utc).isoformat(),
+        },
+        retention_days=cfg.archive_retention_days,
+    )
 
     logger.info("Digest %s sent (%s composer); %d chars", cfg.kind, composer_used, len(text))
     return {
