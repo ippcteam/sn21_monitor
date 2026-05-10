@@ -40,6 +40,20 @@ All notable changes to the SN21 Monitor. Newest first.
 - `DIGEST_LLM_MEMORY_CHARS` (default `10000`) — caps the prior-digests
   block size so the user-message token count stays bounded.
 
+### Fixed
+- **`neurons_daily.json` shape mismatch.** The store is
+  `{"rows": [...]}` (per-UID-per-day), not a flat list — the new
+  `_trend_row` helper tried `rows[-1]` on the dict and raised
+  `KeyError: -1`, taking `gather()` down on Render. Added
+  `_neurons_daily_series` to aggregate per-UID rows into one
+  per-date record (sums mining / burned / validating / owner alpha,
+  carries the subnet-level `burn_rate_pct`). `_trend_row` now guards
+  against non-list inputs so any future store-shape regression
+  degrades gracefully instead of blowing up the whole digest. Same
+  shape assumption was latent in the original `_burn_section` —
+  silently falling through to `subnet_daily.incentive_burn × 100`;
+  both paths now agree.
+
 ## 2026-05-10 — Daily digest (Telegram, LLM-narrated)
 
 ### Added
