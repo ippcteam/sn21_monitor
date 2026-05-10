@@ -78,8 +78,11 @@ def _row_at_offset(rows: list[dict], days_ago: int) -> tuple[dict | None, int | 
     Return (row, actual_days_ago) for the row closest to `days_ago` days
     behind the latest. Falls back to the oldest available row if the window
     extends beyond what's stored. Both rows must carry a `date` field.
+
+    Defensive: returns (None, None) if `rows` is anything other than a non-empty
+    list — keeps a misshapen JSON store from blowing up the whole digest.
     """
-    if not rows:
+    if not isinstance(rows, list) or not rows:
         return None, None
     if days_ago <= 0:
         return rows[-1], 0
@@ -93,6 +96,56 @@ def _row_at_offset(rows: list[dict], days_ago: int) -> tuple[dict | None, int | 
         except Exception:
             return oldest, len(rows) - 1
     return rows[-1 - days_ago], days_ago
+
+
+def _neurons_daily_series(neurons_daily_store: Any) -> list[dict[str, Any]]:
+    """
+    Reduce per-UID-per-day rows ({"rows": [...]}) to one row per date for trends.
+    Per-day fields kept: burn_rate_pct (subnet-level, same on all UID rows for
+    a date) plus aggregate sums of mining / burned / validating alpha.
+    Returns chronologically sorted list of {date, burn_rate_pct, total_*}.
+    """
+    rows = []
+    if isinstance(neurons_daily_store, dict):
+        rows = neurons_daily_store.get("rows") or []
+    elif isinstance(neurons_daily_store, list):
+        rows = neurons_daily_store  # legacy/local-only path
+    if not isinstance(rows, list):
+        return []
+
+    by_date: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        d = r.get("date")
+        if not d:
+            continue
+        agg = by_date.setdefault(d, {
+            "date": d,
+            "burn_rate_pct": None,
+            "total_mining_alpha": 0.0,
+            "total_burned_alpha": 0.0,
+            "total_validating_alpha": 0.0,
+            "total_owner_alpha": 0.0,
+        })
+        if agg["burn_rate_pct"] is None and r.get("burn_rate_pct") is not None:
+            try:
+                agg["burn_rate_pct"] = float(r["burn_rate_pct"])
+            except (TypeError, ValueError):
+                pass
+        for src, dst in [
+            ("daily_mining_alpha", "total_mining_alpha"),
+            ("daily_burned_alpha", "total_burned_alpha"),
+            ("daily_validating_alpha", "total_validating_alpha"),
+            ("daily_owner_alpha", "total_owner_alpha"),
+        ]:
+            try:
+                v = float(r.get(src) or 0)
+                agg[dst] += v
+            except (TypeError, ValueError):
+                pass
+
+    return [by_date[k] for k in sorted(by_date.keys())]
 
 
 def _label_brand(name: str | None) -> str | None:
@@ -307,12 +360,11 @@ def _owner_pool_section() -> dict:
     return out
 
 
-def _burn_section(subnet_log: list[dict]) -> dict:
+def _burn_section(subnet_log: list[dict], neurons_daily_series: list[dict]) -> dict:
     """Burn rate + miner/validator activity (from neurons_daily and subnet_daily)."""
     out: dict[str, Any] = {}
-    nd = load_json(NEURONS_DAILY_STORE, []) or []
-    if isinstance(nd, list) and nd:
-        latest = nd[-1] or {}
+    if neurons_daily_series:
+        latest = neurons_daily_series[-1] or {}
         out["burn_rate_pct"] = latest.get("burn_rate_pct")
         out["date"] = latest.get("date")
         out["miner_emission_alpha"] = latest.get("total_mining_alpha")
@@ -401,7 +453,7 @@ def _trend_row(rows: list[dict], extractor) -> dict[str, Any]:
 
 
 def _trends_section(subnet_log: list[dict], daily_log: list[dict],
-                    neurons_daily: list[dict]) -> dict[str, Any]:
+                    neurons_daily_series: list[dict]) -> dict[str, Any]:
     """Per-metric 7d / 30d trends, drawing from whichever store has the longest history."""
     out: dict[str, Any] = {}
 
@@ -453,7 +505,7 @@ def _trends_section(subnet_log: list[dict], daily_log: list[dict],
             except (TypeError, ValueError):
                 return None
         return None
-    out["burn_rate_pct"] = _trend_row(neurons_daily or [], _burn_x)
+    out["burn_rate_pct"] = _trend_row(neurons_daily_series or [], _burn_x)
 
     # Our entitled alpha — from daily_log
     out["our_entitled_alpha"] = _trend_row(
@@ -469,7 +521,7 @@ def _trends_section(subnet_log: list[dict], daily_log: list[dict],
     out["windows"] = {
         "subnet_daily_rows": len(subnet_log),
         "daily_log_rows": len(daily_log),
-        "neurons_daily_rows": len(neurons_daily or []),
+        "neurons_daily_days": len(neurons_daily_series or []),
     }
     return out
 
@@ -611,16 +663,19 @@ def gather() -> dict[str, Any]:
     """Pull everything needed for the SN21 daily digest. Pure read; no syncs."""
     subnet_log = load_json(SUBNET_DAILY_STORE, []) or []
     daily_log = load_json(DAILY_LOG, []) or []
-    neurons_daily = load_json(NEURONS_DAILY_STORE, []) or []
+    # neurons_daily.json is {"rows": [...]} on disk (per-UID-per-day).
+    # Reduce to one row per date for trend / burn-rate computation.
+    neurons_daily_raw = load_json(NEURONS_DAILY_STORE, {})
+    neurons_daily_series = _neurons_daily_series(neurons_daily_raw)
 
     price, p_warn = _price_section(subnet_log)
     pool = _pool_section(subnet_log)
     movers, m_warn = _movers_section()
     owner = _owner_pool_section()
-    burn = _burn_section(subnet_log)
+    burn = _burn_section(subnet_log, neurons_daily_series)
     tier = _tier_section()
     emissions = _emissions_section(daily_log)
-    trends = _trends_section(subnet_log, daily_log, neurons_daily)
+    trends = _trends_section(subnet_log, daily_log, neurons_daily_series)
 
     # Multi-window per-coldkey movers (7d, 30d).
     holders_store = load_json(HOLDERS_STORE, {"snapshots": []}) or {}
