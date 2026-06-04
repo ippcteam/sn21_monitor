@@ -2,6 +2,40 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-05-17 — Scout: candidate-subnet scanner + weekly digest
+
+### Added
+- **`subnet_scan.py`** — daily-scheduled scanner (09:15 UTC) for a curated
+  shortlist of candidate netuids (default SN2/8/13/28/43). Per subnet
+  computes: permit feasibility against the lowest active permit-holder,
+  projected emission share and annual ROI on the configured budget, proper
+  constant-product AMM slippage on the three-leg trade (SN21 sell → target
+  buy → target sell), and risk signals (burn %, top-10/64 concentration,
+  net flow vs mcap, miner/validator counts). Composite score =
+  `annual_roi × (1 − round_trip_cost) × manual_multiplier`.
+- **`data/subnet_scan.json`** + **`data/subnet_scan_history.json`** (90-day
+  retention) + **`data/subnet_notes.json`** (qualitative overrides, seeded
+  with SN28 multiplier 0.5 pending emission-farming post-mortem review).
+- **API**: `GET /api/scan/candidates`, `GET /api/scan/history`,
+  `POST /api/scan/run`, `GET /api/scan/notes`,
+  `POST/DELETE /api/scan/notes/{netuid}`.
+- **`digest/sources/scout_weekly.py`** — reads the latest scan + 7d history,
+  emits per-subnet rank changes, score deltas, permit-flip flags.
+- **`digest/channels/telegram_scout.py`** — separate Telegram channel using
+  `TELEGRAM_SCOUT_BOT_TOKEN` / `TELEGRAM_SCOUT_CHAT_ID`.
+- **`digest/prompts/scout_weekly.md`** — narrative format for the Scout
+  weekly digest (ranking, permit feasibility, yield projections, risk
+  signals, week-over-week diffs).
+- **Weekly digest schedule** — Mondays 10:00 UTC. Enabled by extending
+  `DigestConfig` with an optional `cron_kwargs` field for non-daily
+  triggers; existing `sn21_daily` config unchanged.
+
+### New env vars
+- `SCAN_NETUIDS=2,8,13,28,43` — candidate shortlist
+- `SCAN_BUDGET_SN21_ALPHA=500000` — SN21 alpha to convert into target alpha
+- `TELEGRAM_SCOUT_BOT_TOKEN` — Scout-channel bot
+- `TELEGRAM_SCOUT_CHAT_ID` — Scout-channel chat id
+
 ## 2026-05-10 — Digest memory + 7d/30d trend windows
 
 ### Added

@@ -24,11 +24,12 @@ class DigestConfig:
     gather: Callable[[], dict[str, Any]]      # returns DigestInputs
     prompt_path: Path                         # path to prompt template (markdown)
     channel_send: Callable[[str], dict[str, Any]]  # ships text; returns sender result
-    schedule_cron: tuple[int, int]            # (hour, minute) UTC
+    schedule_cron: tuple[int, int]            # (hour, minute) UTC — informational
     state_filename: str                       # under DATA_DIR
     title: str                                # short human label for fallback header
     archive_filename: str | None = None       # under DATA_DIR; per-digest history
     archive_retention_days: int = 30          # cap on archive length
+    cron_kwargs: dict[str, Any] | None = None  # full APScheduler CronTrigger kwargs (weekly etc.); overrides schedule_cron when set
 
     @property
     def state_path(self) -> Path:
