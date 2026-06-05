@@ -24,6 +24,16 @@ services:
       # Needed for /api/backfill & backfill_chain.py (historical blocks); finney tip uses default in collector
       - key: SUBTENSOR_ARCHIVE_NETWORK
         value: "archive"
+      # Scout — candidate-subnet scanner
+      - key: SCAN_NETUIDS
+        value: "2,8,13,28,43"
+      - key: SCAN_BUDGET_SN21_ALPHA
+        value: "500000"
+      # Separate Telegram channel for the weekly Scout digest (Mon 10:00 UTC)
+      - key: TELEGRAM_SCOUT_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_SCOUT_CHAT_ID
+        sync: false
     disk:
       name: sn21-data
       mountPath: /data

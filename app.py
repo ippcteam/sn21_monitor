@@ -22,10 +22,26 @@ from collector import migrate_and_rebuild_from_logs, save_json
 from config import DATA_DIR, DAILY_LOG, OWNER_LEDGER
 from digest.core import DigestConfig, run_digest
 from digest.channels import telegram as telegram_channel
+from digest.channels import telegram_scout as telegram_scout_channel
+from digest.sources import scout_weekly as scout_weekly_source
 from digest.sources import sn21_daily as sn21_daily_source
 from ownership import OWNERSHIP_START, next_tier_info, scheduled_tier_events
+from subnet_scan import (
+    delete_note as scan_delete_note,
+    latest_scan as scan_latest,
+    load_notes as scan_load_notes,
+    run_scan as scan_run,
+    scan_history,
+    set_note as scan_set_note,
+)
 from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
+from weights_scan import (
+    latest_scan as weights_latest,
+    our_validator_wallets,
+    run_scan as weights_run,
+    scan_history as weights_history,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -473,6 +489,99 @@ async def api_house_snapshot_now(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Scout (candidate subnet scanner) ──────────────────────────────────────────
+
+
+@app.get("/api/scan/candidates")
+async def api_scan_candidates(_=Depends(require_auth)):
+    """Latest Scout scan: ranked subnets with feasibility / yield / slippage / risk."""
+    payload = scan_latest()
+    if not payload:
+        return {"error": "No scan yet — POST /api/scan/run"}
+    return payload
+
+
+@app.get("/api/scan/history")
+async def api_scan_history(_=Depends(require_auth), days: int = 30):
+    """Composite-score history per subnet (last N days)."""
+    return scan_history(days=days)
+
+
+@app.post("/api/scan/run")
+async def api_scan_run(_=Depends(require_auth)):
+    """Run the Scout scan immediately (~30s for the 5-netuid shortlist)."""
+    try:
+        return scan_run()
+    except Exception as e:
+        logger.exception("Scout scan failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/scan/notes")
+async def api_scan_notes(_=Depends(require_auth)):
+    """Qualitative overrides: { netuid: { multiplier, note } }."""
+    return scan_load_notes()
+
+
+@app.post("/api/scan/notes/{netuid}")
+async def api_scan_notes_set(
+    netuid: int, payload: dict = Body(default={}), _=Depends(require_auth)
+):
+    """Set qualitative override for one netuid. Body: { multiplier?, note? }."""
+    multiplier = payload.get("multiplier")
+    note = payload.get("note")
+    if multiplier is not None:
+        try:
+            multiplier = float(multiplier)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="multiplier must be numeric")
+    return {"netuid": netuid, "override": scan_set_note(netuid, multiplier=multiplier, note=note)}
+
+
+@app.delete("/api/scan/notes/{netuid}")
+async def api_scan_notes_delete(netuid: int, _=Depends(require_auth)):
+    """Drop a qualitative override (revert to multiplier=1.0)."""
+    return {"netuid": netuid, "removed": scan_delete_note(netuid)}
+
+
+# ── Validator weights (copy / burn scan + wallet identification) ──────────────
+
+
+@app.get("/api/weights/scan")
+async def api_weights_scan(_=Depends(require_auth)):
+    """Latest validator weight-copy / burn-status scan (cached 60s on disk)."""
+    payload = weights_latest()
+    if not payload:
+        return {"error": "No scan yet — POST /api/weights/scan"}
+    return payload
+
+
+@app.post("/api/weights/scan")
+async def api_weights_scan_run(_=Depends(require_auth)):
+    """Run the on-chain weight scan now (~30s; reads every validator's vector)."""
+    try:
+        return weights_run()
+    except Exception as e:
+        logger.exception("Weights scan failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/weights/history")
+async def api_weights_history(_=Depends(require_auth), days: int = 30):
+    """Daily burn-fraction / copier-count history (last N days)."""
+    return weights_history(days=days)
+
+
+@app.get("/api/validator/wallets")
+async def api_validator_wallets(_=Depends(require_auth), hotkey: str | None = None):
+    """Full coldkey→stake breakdown behind our validator hotkey (UID 64 by default)."""
+    try:
+        return our_validator_wallets(hotkey=hotkey)
+    except Exception as e:
+        logger.exception("Validator wallets lookup failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -636,6 +745,20 @@ def scheduled_neurons_daily():
         logger.exception("Scheduled neurons daily snapshot failed")
 
 
+def scheduled_scout_scan():
+    try:
+        scan_run()
+    except Exception:
+        logger.exception("Scheduled Scout scan failed")
+
+
+def scheduled_weights_scan():
+    try:
+        weights_run()
+    except Exception:
+        logger.exception("Scheduled weights scan failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -668,6 +791,18 @@ DIGESTS: dict[str, DigestConfig] = {
         archive_filename="digest_archive_sn21.json",
         archive_retention_days=30,
         title="SN21 Daily",
+    ),
+    "scout_weekly": DigestConfig(
+        kind="scout_weekly",
+        gather=scout_weekly_source.gather,
+        prompt_path=_PROMPTS_DIR / "scout_weekly.md",
+        channel_send=telegram_scout_channel.send,
+        schedule_cron=(10, 0),  # informational; real schedule via cron_kwargs below
+        state_filename="digest_state_scout.json",
+        archive_filename="digest_archive_scout.json",
+        archive_retention_days=12,  # 12 weekly digests of memory
+        title="Scout Weekly",
+        cron_kwargs={"day_of_week": "mon", "hour": 10, "minute": 0},
     ),
 }
 
@@ -736,11 +871,27 @@ scheduler.add_job(
     id="daily_neurons_snapshot",
     replace_existing=True,
 )
+scheduler.add_job(
+    scheduled_scout_scan,
+    CronTrigger(hour=9, minute=15),
+    id="daily_scout_scan",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_weights_scan,
+    CronTrigger(hour=9, minute=20),
+    id="daily_weights_scan",
+    replace_existing=True,
+)
 for _kind, _cfg in DIGESTS.items():
-    _h, _m = _cfg.schedule_cron
+    if _cfg.cron_kwargs:
+        _trigger = CronTrigger(**_cfg.cron_kwargs)
+    else:
+        _h, _m = _cfg.schedule_cron
+        _trigger = CronTrigger(hour=_h, minute=_m)
     scheduler.add_job(
         scheduled_digest,
-        CronTrigger(hour=_h, minute=_m),
+        _trigger,
         args=[_kind],
         id=f"daily_digest_{_kind}",
         replace_existing=True,
@@ -771,7 +922,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 

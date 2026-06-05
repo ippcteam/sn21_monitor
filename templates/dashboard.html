@@ -487,6 +487,7 @@
     <button class="tab-btn active" data-tab="home">Home</button>
     <button class="tab-btn" data-tab="activity">Activity</button>
     <button class="tab-btn" data-tab="neurons">Neurons</button>
+    <button class="tab-btn" data-tab="validators">Validators</button>
     <button class="tab-btn" data-tab="movement">Movement</button>
   </nav>
   <div class="topbar-right">
@@ -656,6 +657,29 @@
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
   </section><!-- /neurons -->
+
+  <!-- ───────────── VALIDATORS TAB ───────────── -->
+  <section class="tab-panel" data-panel="validators">
+    <div class="section-label">
+      Validator Scoring · Weight-Copy Scan
+      <span id="weightsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerWeightsScan()" title="Read every validator's weight vector from chain (~30s)">Scan now (~30s)</button>
+    </div>
+    <div id="burnBanner" class="alert-banner" style="margin-top:0.75rem"></div>
+    <div class="cards-grid" id="weightsCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Validators · Weight Vectors</div>
+    <div class="table-card" id="weightsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Our Validator · Wallet Identification <span id="walletsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="table-card" id="walletsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </section><!-- /validators -->
 
   <!-- ───────────── MOVEMENT TAB ───────────── -->
   <section class="tab-panel" data-panel="movement">
@@ -1279,12 +1303,171 @@ async function init() {
   await loadUids();
 }
 
+/* ── Validators tab (weight-copy / burn scan + wallet identification) ─── */
+let _weightsScan = null;
+
+function blocksToAge(b) {
+  if (b === null || b === undefined) return '—';
+  const secs = b * 12;
+  if (secs < 3600) return `${b} (~${Math.round(secs/60)}m)`;
+  if (secs < 86400) return `${b} (~${(secs/3600).toFixed(1)}h)`;
+  return `${b} (~${(secs/86400).toFixed(1)}d)`;
+}
+
+function verdictChip(copy) {
+  if (!copy) return '<span style="color:var(--muted)">—</span>';
+  const v = copy.verdict;
+  const src = (copy.source_uid != null)
+    ? ` <span style="color:var(--muted)">← ${copy.source_name || 'uid '+copy.source_uid}</span>` : '';
+  const cos = (copy.cosine != null) ? ` <span style="color:var(--muted)">${copy.cosine.toFixed(3)}</span>` : '';
+  let color = 'var(--text-dim)';
+  if (v === 'burn') color = 'var(--red)';
+  else if (v === 'identical→copy' || v === 'near-copy') color = 'var(--amber)';
+  else if (v === 'independent') color = 'var(--green)';
+  return `<span style="color:${color};font-weight:500">${v}</span>${cos}${(v==='identical→copy'||v==='near-copy')?src:''}`;
+}
+
+async function triggerWeightsScan() {
+  const btn = event && event.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  try {
+    await fetch('/api/weights/scan', { method: 'POST' });
+    _tabLoaded.validators = false;
+    await loadValidatorsTab();
+  } catch (e) {
+    console.error('weights scan failed', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Scan now (~30s)'; }
+  }
+}
+
+async function loadValidatorsTab() {
+  const cardsEl = document.getElementById('weightsCards');
+  const tableEl = document.getElementById('weightsTable');
+  const banner  = document.getElementById('burnBanner');
+  try {
+    const r = await fetch('/api/weights/scan');
+    const d = await r.json();
+    if (d.error) {
+      banner.className = 'alert-banner';
+      cardsEl.innerHTML = '';
+      tableEl.innerHTML = `<div class="no-data"><strong>${d.error}</strong>
+        <span>The scan reads every validator's weight vector from chain (~30s).
+        <button class="btn-sm" onclick="triggerWeightsScan()">Scan now</button></span></div>`;
+      loadValidatorWallets();
+      return;
+    }
+    _weightsScan = d;
+
+    document.getElementById('weightsMeta').textContent =
+      ' · block ' + fmtInt(d.block) + ' · ' + (d.fetched_at_utc || '').replace('T',' ').slice(0,16) + ' UTC';
+
+    // Burn banner
+    const b = d.burn || {};
+    if (b.is_burn_mode) {
+      banner.className = 'alert-banner alert-drop show';
+      banner.innerHTML = `<span class="burn-pill">BURN MODE</span>
+        <span>${b.n_burning}/${b.n_setters} validators assign 100% to owner UID ${b.target_uid}
+        (${d.owner && d.owner.name ? d.owner.name : 'owner'}${d.owner && d.owner.is_ours ? ' · ours' : ''}).
+        No miner scoring — copy-detection is inactive until vectors differentiate.</span>`;
+    } else {
+      const copiers = d.validators.filter(v => v.copy && ['identical→copy','near-copy'].includes(v.copy.verdict)).length;
+      const indep   = d.validators.filter(v => v.copy && v.copy.verdict === 'independent').length;
+      banner.className = 'alert-banner alert-surge show';
+      banner.innerHTML = `<span class="burn-pill live">LIVE SCORING</span>
+        <span>${b.n_setters} setting weights · ${copiers} copying · ${indep} independent.</span>`;
+    }
+
+    // Summary cards
+    const ov = d.our_validator || {};
+    const cards = [
+      { label: 'Weight Setters', value: b.n_setters, unit: `/ ${b.n_permits} permits`, accent: '#2563EB' },
+      { label: 'Burning (→owner)', value: b.n_burning, unit: `${Math.round((b.burn_fraction||0)*100)}%`, accent: '#EF4444' },
+      { label: 'Our vTrust', value: ov.vtrust != null ? ov.vtrust.toFixed(4) : '—', unit: `UID ${ov.uid}`, accent: '#10B981' },
+      { label: 'Our Miners Scored', value: ov.scored_miners != null ? ov.scored_miners : '—', unit: ov.is_burning ? 'burning' : 'scoring', accent: '#F59E0B' },
+      { label: 'Owner UID Incentive', value: d.owner && d.owner.incentive != null ? d.owner.incentive.toFixed(3) : '—', unit: `UID ${d.owner ? d.owner.uid : '—'}`, accent: '#8B5CF6' },
+    ];
+    cardsEl.innerHTML = cards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+      </div>`).join('');
+
+    // Validator table
+    const rows = d.validators.map(v => {
+      const oursTag = v.is_ours ? ' <span class="house-chip">OURS</span>' : '';
+      const ownerTag = v.is_owner_uid ? ' <span class="house-chip" style="background:rgba(139,92,246,0.12);border-color:rgba(139,92,246,0.4);color:#A78BFA">OWNER</span>' : '';
+      const houseChip = (v.is_house && !v.is_ours) ? ' <span class="house-chip">HOUSE</span>' : '';
+      const name = v.name || `<span style="color:var(--muted)">${v.hotkey_short || '—'}</span>`;
+      const top = (v.top_target_uid != null)
+        ? `${v.top_target_uid} <span style="color:var(--muted)">${((v.top_target_share||0)*100).toFixed(0)}%</span>` : '—';
+      const cos = v.cos_to_consensus != null ? v.cos_to_consensus.toFixed(3) : '—';
+      const rowStyle = v.is_ours ? ' style="background:rgba(245,158,11,0.05)"' : '';
+      return `<tr${rowStyle}>
+        <td class="uid">${v.uid}</td>
+        <td>${name}${oursTag}${houseChip}${ownerTag}</td>
+        <td class="mono">${v.stake_pct != null ? v.stake_pct.toFixed(2)+'%' : '—'}</td>
+        <td class="mono">${v.vtrust != null ? v.vtrust.toFixed(4) : '—'}</td>
+        <td class="mono">${v.sets_weights ? v.scored_miners : '<span style="color:var(--muted)">no wts</span>'}</td>
+        <td class="mono">${top}</td>
+        <td class="mono">${cos}</td>
+        <td>${verdictChip(v.copy)}</td>
+        <td class="mono" title="blocks since last weight-set">${blocksToAge(v.weight_set_age_blocks)}</td>
+      </tr>`;
+    }).join('');
+    tableEl.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr>
+        <th>UID</th><th>Validator</th><th>Stake</th><th>vTrust</th><th>Scored</th>
+        <th>Top→</th><th>cos·cons</th><th>Copy verdict</th><th>Wt age</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>`;
+
+    loadValidatorWallets();
+  } catch (e) {
+    console.error(e);
+    tableEl.innerHTML = `<div class="no-data"><strong>Failed to load scan</strong><span>${e}</span></div>`;
+  }
+}
+
+async function loadValidatorWallets() {
+  const el = document.getElementById('walletsTable');
+  const meta = document.getElementById('walletsMeta');
+  try {
+    const r = await fetch('/api/validator/wallets');
+    const d = await r.json();
+    if (d.error) {
+      el.innerHTML = `<div class="no-data"><strong>${d.error}</strong></div>`;
+      return;
+    }
+    const tick = d.cross_check_ok === true
+      ? '<span style="color:var(--green)">✓ matches chain</span>'
+      : (d.cross_check_ok === false ? '<span style="color:var(--red)">✗ chain mismatch</span>' : '');
+    meta.innerHTML = ` · UID ${d.uid} · ${d.wallet_count} wallets · ${fmtInt(Math.round(d.total_alpha_staked))} α `
+      + (d.onchain_total_hotkey_alpha != null ? `· chain ${fmtInt(Math.round(d.onchain_total_hotkey_alpha))} α ${tick}` : '');
+    const rows = (d.wallets || []).map((w, i) => `
+      <tr>
+        <td class="uid">${i+1}</td>
+        <td class="mono" title="${w.coldkey || ''}">${w.coldkey_short || '—'}</td>
+        <td>${w.name || '<span style="color:var(--muted)">—</span>'}${w.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}</td>
+        <td class="mono">${fmtAlpha(w.alpha, 4)}</td>
+        <td class="mono">${fmtAlpha(w.as_tao, 4)}</td>
+        <td class="mono">${w.pct != null ? w.pct.toFixed(2)+'%' : '—'}</td>
+      </tr>`).join('');
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Coldkey</th><th>Name</th><th>Alpha (α)</th><th>As TAO (τ)</th><th>Share</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="no-data"><strong>Failed to load wallets</strong><span>${e}</span></div>`;
+  }
+}
+
 /* ── Tab switching ─────────────────────────────────────────────── */
-const _tabLoaded = { home: true, activity: false, neurons: false, movement: false };
+const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false };
 const _tabLoaders = {
-  activity: () => loadActivityTab(),
-  neurons:  () => loadNeuronsTab(),
-  movement: () => loadMovementTab(),
+  activity:   () => loadActivityTab(),
+  neurons:    () => loadNeuronsTab(),
+  validators: () => loadValidatorsTab(),
+  movement:   () => loadMovementTab(),
 };
 
 /* ── Activity tab loader ─────────────────────────────────────── */
@@ -1850,7 +2033,7 @@ document.querySelectorAll('[data-house-filter]').forEach(b => {
 });
 
 const initialTab = (location.hash || '').replace('#', '');
-if (initialTab && ['home','activity','neurons','movement'].includes(initialTab)) {
+if (initialTab && ['home','activity','neurons','validators','movement'].includes(initialTab)) {
   activateTab(initialTab);
 }
 
