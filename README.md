@@ -21,6 +21,7 @@ movements, and burn-aware weekly earnings.
 | **Home** | Live metrics (owner pool 18%, our entitlement, alpha price, TAO price, wallet balance/USD) · **House Earnings · Current Mining Week** (miners net + gross, validators, owner key, burn pill) · 5-week stacked weekly chart · trend charts · active UID table |
 | **Activity** | Subnet 24h pool volumes (buy/sell), holder count, burn rate, active validator/miner counts · 30-day trend charts |
 | **Neurons** | All 256 SN21 UIDs split into validators / miners, with mining/validation window detection (Mon 12:00 ET → following Mon 12:00 ET), submitting-in-window flag, and **House toggle column** (☆/★) plus All/House/Other filter pills |
+| **Validators** | On-chain weight-copy scan: burn-status banner, per-validator scoring breadth, vTrust, stake%, cosine-to-consensus, and copy verdict (copier vs independent, with source guess) · **Our validator wallet identification** (coldkey→stake breakdown for UID 64, cross-checked against on-chain `TotalHotkeyAlpha`) |
 | **Movement** | Our owner-coldkey alpha balance over time · 24h holder movers (top inflows/outflows, NEW/EXITED/BOUGHT/SOLD), with House column and house/other split in the summary |
 
 ## House vs Other labels
@@ -82,7 +83,10 @@ non-100% epoch on the dashboard.
 ├── digest_archive_<kind>.json  — per-digest memory (last 30 sent texts; LLM context)
 ├── subnet_scan.json            — latest Scout scan (ranked candidates)
 ├── subnet_scan_history.json    — daily Scout rows (90-day retention)
-└── subnet_notes.json           — manual qualitative overrides per candidate netuid
+├── subnet_notes.json           — manual qualitative overrides per candidate netuid
+├── weights_scan.json           — latest validator weight-copy / burn scan
+├── weights_scan_history.json   — daily burn-fraction / copier-count rows (90d)
+└── validator_names.json        — hotkey→operator-name cache (Taostats)
 ```
 
 ## Scout — candidate subnet scanner
@@ -174,6 +178,7 @@ oldest available snapshot.
 | Holders snapshot (Movement tab data) | 08:45 | `holders_sync.sync_holders_snapshot` |
 | Neurons per-UID daily snapshot (House weekly data) | 09:00 | `neurons_daily_sync.sync_neurons_daily` |
 | Scout scan (candidate subnets) | 09:15 | `subnet_scan.run_scan` |
+| Validator weight-copy / burn scan | 09:20 | `weights_scan.run_scan` |
 | Daily SN21 digest (Telegram) | 09:30 (override via `DIGEST_TIME_UTC`) | `digest.run_digest("sn21_daily")` |
 | **Scout weekly digest (Telegram)** | **Mon 10:00** | `digest.run_digest("scout_weekly")` |
 | Tier-boundary log marker | one-off at each tier flip date | `app.log_tier_boundary` |
@@ -202,6 +207,9 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `GET /api/scan/candidates` — latest Scout scan (ranked candidate subnets)
 - `GET /api/scan/history?days=30` — composite-score history per candidate
 - `GET /api/scan/notes` — qualitative overrides ({ netuid: { multiplier, note } })
+- `GET /api/weights/scan` — latest validator weight-copy / burn scan (Validators tab)
+- `GET /api/weights/history?days=30` — daily burn-fraction / copier-count rows
+- `GET /api/validator/wallets` — coldkey→stake breakdown for our validator (UID 64)
 
 ### Write / trigger (auth)
 - `POST /api/collect` — manual chain collect
@@ -218,6 +226,7 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `POST /api/scan/run` — run Scout scan now (~30 s for the 5-netuid shortlist)
 - `POST /api/scan/notes/{netuid}` — set qualitative override `{ multiplier?, note? }`
 - `DELETE /api/scan/notes/{netuid}` — remove override
+- `POST /api/weights/scan` — run on-chain validator weight scan now (~30 s)
 
 The topbar **Refresh** button fans out collect → taostats → subnet → house-snapshot
 sequentially with 300 ms gaps. Holders snapshot is intentionally excluded

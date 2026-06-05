@@ -2,6 +2,51 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-06-04 — Validator weight-copy scan + wallet identification
+
+### Added
+- **`weights_scan.py`** — direct finney chain read of every validator's
+  published weight vector (`subtensor.weights(netuid=21)`), joined to the
+  metagraph (stake, vTrust, last weight-set age, hot/coldkeys) and enriched
+  with operator names (Taostats `hotkey_name`, cached in
+  `data/validator_names.json`). Computes per-validator scoring breadth
+  (#miners scored), top-target share, stake-weighted **cosine-to-consensus**,
+  and a pairwise cosine-similarity matrix across weight-setters.
+  - **Burn-mode detection** — flags validators assigning ≥98% to the
+    subnet-owner UID; reports the burning fraction and, when ≥80% of setters
+    burn, marks the whole subnet in burn-mode. Copy verdicts are labelled
+    `burn` (no signal) in that state so identical one-hot vectors aren't
+    misread as copying.
+  - **Copy detection** — once vectors differentiate, each setter gets a
+    nearest-neighbour verdict (`identical→copy` / `near-copy` / `similar` /
+    `independent`) plus a highest-stake source guess within its similarity
+    cluster.
+  - **`our_validator_wallets()`** — full coldkey→stake breakdown behind our
+    validator hotkey (UID 64), cross-checked against on-chain
+    `TotalHotkeyAlpha` so the wallet list is provably complete.
+  - Recognises the owner UID (135) and UID 64 as ours by matching
+    `SubnetOwner(21)` / the on-chain coldkey, even when keys aren't
+    House-labelled.
+- **`data/weights_scan.json`** (latest) + **`data/weights_scan_history.json`**
+  (daily burn-fraction / copier-count rows, 90-day retention).
+- **API**: `GET/POST /api/weights/scan`, `GET /api/weights/history`,
+  `GET /api/validator/wallets`.
+- **Scheduler** — daily on-chain weights scan at 09:20 UTC.
+- **Dashboard** — new **Validators** tab: burn-status banner, summary cards
+  (setters / burning / our vTrust / our miners scored / owner-UID incentive),
+  a validator table (name · House/ours/owner tags · stake% · vTrust · scored ·
+  top-target · cos-to-consensus · copy verdict · weight-set age), and an
+  "Our validator · wallet identification" table with the chain cross-check
+  tick.
+
+### Notes
+- Uses only `math` (no new dependency); reuses `collector._configure_chain_ssl`
+  for WebSocket verification on Render.
+- As of launch the subnet is in **full burn-to-owner mode** — all 11
+  weight-setting validators (UID 64 included) assign 100% to owner UID 135, so
+  no copy signal exists yet. The scan is built to surface copiers the moment
+  validators flip to differentiated scoring.
+
 ## 2026-05-17 — Scout: candidate-subnet scanner + weekly digest
 
 ### Added

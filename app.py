@@ -36,6 +36,12 @@ from subnet_scan import (
 )
 from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
+from weights_scan import (
+    latest_scan as weights_latest,
+    our_validator_wallets,
+    run_scan as weights_run,
+    scan_history as weights_history,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -538,6 +544,44 @@ async def api_scan_notes_delete(netuid: int, _=Depends(require_auth)):
     return {"netuid": netuid, "removed": scan_delete_note(netuid)}
 
 
+# ── Validator weights (copy / burn scan + wallet identification) ──────────────
+
+
+@app.get("/api/weights/scan")
+async def api_weights_scan(_=Depends(require_auth)):
+    """Latest validator weight-copy / burn-status scan (cached 60s on disk)."""
+    payload = weights_latest()
+    if not payload:
+        return {"error": "No scan yet — POST /api/weights/scan"}
+    return payload
+
+
+@app.post("/api/weights/scan")
+async def api_weights_scan_run(_=Depends(require_auth)):
+    """Run the on-chain weight scan now (~30s; reads every validator's vector)."""
+    try:
+        return weights_run()
+    except Exception as e:
+        logger.exception("Weights scan failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/weights/history")
+async def api_weights_history(_=Depends(require_auth), days: int = 30):
+    """Daily burn-fraction / copier-count history (last N days)."""
+    return weights_history(days=days)
+
+
+@app.get("/api/validator/wallets")
+async def api_validator_wallets(_=Depends(require_auth), hotkey: str | None = None):
+    """Full coldkey→stake breakdown behind our validator hotkey (UID 64 by default)."""
+    try:
+        return our_validator_wallets(hotkey=hotkey)
+    except Exception as e:
+        logger.exception("Validator wallets lookup failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -708,6 +752,13 @@ def scheduled_scout_scan():
         logger.exception("Scheduled Scout scan failed")
 
 
+def scheduled_weights_scan():
+    try:
+        weights_run()
+    except Exception:
+        logger.exception("Scheduled weights scan failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -826,6 +877,12 @@ scheduler.add_job(
     id="daily_scout_scan",
     replace_existing=True,
 )
+scheduler.add_job(
+    scheduled_weights_scan,
+    CronTrigger(hour=9, minute=20),
+    id="daily_weights_scan",
+    replace_existing=True,
+)
 for _kind, _cfg in DIGESTS.items():
     if _cfg.cron_kwargs:
         _trigger = CronTrigger(**_cfg.cron_kwargs)
@@ -865,7 +922,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 
