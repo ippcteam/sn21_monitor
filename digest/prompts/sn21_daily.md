@@ -30,6 +30,12 @@ PRICE
 - Alpha: <price τ> (1d <%>, 7d <%>, 30d <%>) ≈ $<usd>
 - TAO: $<usd> (1d <%>, 7d <%>, 30d <%>)
 
+MARKET (only if `market.available`)
+- verdict: <market-wide | SN21-specific | outperforming | in line>
+- field: <pct_up_24h>% of <n_subnets> subnets up, median <median_move_24h_tao_pct>% in TAO
+- SN21 vs field: move pctile <move_24h_percentile>, price pctile <price_percentile> (decile <price_decile>), vs median <vs_median_24h_tao_pct>pp
+- best/worst: <best name/netuid> <move>%, <worst name/netuid> <move>%
+
 POOL · 24H
 - buys/sells: <buys>/<sells>  buyers/sellers: <buyers>/<sellers>
 - alpha vol: <buy α> in / <sell α> out
@@ -68,8 +74,14 @@ WATCH TOMORROW
 <1-2 bullets — what changes if the next snapshot moves up or down on these axes.>
 ```
 
+Market context (critical framing):
+- The `market` block compares SN21's alpha move to every other subnet, measured in TAO (which strips out TAO's own market move). Use it to frame the PRICE discussion so a market-wide drop is not mistaken for an SN21 problem.
+- In TLDR, when alpha fell, state explicitly whether it was market-wide or SN21-specific (from `market.verdict` / `market.verdict_plain`). Example: "Alpha −6% in USD, but ~80% of that is TAO falling market-wide; in TAO terms SN21 sits at the 54th percentile of the field — in line with peers."
+- If `market.verdict` is `sn21_specific`, treat it as a real risk and surface it in RISKS. If `market_wide`, reassure that the move is industry-wide, not SN21.
+- If `market.available` is false, omit the MARKET section entirely (do not invent it).
+
 Hard rules:
-- Keep total output ≤ 480 words.
+- Keep total output ≤ 520 words.
 - Numbers only — no rounding to "many" or "lots". If alpha_delta is 34020.52, write that.
 - If `stale_fields` is non-empty, prepend the digest with a single line: `NOTE: stale data — <fields>`.
 - If `flags` is empty AND no top movers and no exits AND trends are flat, write: `Quiet day. No notable movement.` and skip everything below TLDR + PRICE.

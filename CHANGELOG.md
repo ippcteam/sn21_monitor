@@ -2,6 +2,36 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-06-08 — Market context: SN21 alpha move vs the whole field
+
+### Added
+- **`market_sync.py`** — daily all-subnets alpha-price scan. One finney chain
+  call (`subtensor.all_subnets()`) pulls every subnet's AMM reserves; computes
+  each subnet's alpha price in **TAO** (`tao_in / alpha_in`, the same ratio the
+  collector uses for SN21) and in USD. Measuring in TAO strips out TAO's own
+  market move, isolating *subnet-relative* performance — so a TAO-wide selloff
+  is no longer mistaken for an SN21 problem.
+  - **Breadth + cohorts** — % of subnets up/down, median 24h move, best/worst
+    performer, price deciles (top 10% … bottom 10%).
+  - **SN21 standing** — price percentile/decile, daily-move percentile, move vs
+    field median, and a `verdict`: `market_wide` (moved with the field),
+    `sn21_specific` (lagged while the market held), `outperforming`, or `inline`.
+- **`data/subnets_market.json`** (latest full snapshot) +
+  **`data/subnets_market_history.json`** (one compact row/day, 365d — drives the
+  SN21 rank-over-time chart) + **`data/subnets_price_ledger.json`**
+  (`{date:{netuid:price}}`, 14d window, for robust 24h/7d deltas).
+- **Endpoints** — `GET /api/market/summary`, `GET /api/market/history?days=N`,
+  `POST /api/market/sync` (manual run).
+- **Scheduler** — `daily_market_scan` at **08:05 UTC** (after the 08:00 chain
+  collect, before the 08:15 Taostats sync).
+- **Digest** — `sn21_daily` now carries a `market` block; the composer leads the
+  PRICE discussion with the market verdict (e.g. "−6% in USD, but ~80% is TAO
+  market-wide; in TAO terms SN21 sits at the 54th percentile — in line with
+  peers") and RISKS surfaces `sn21_specific` weakness or reassures on
+  `market_wide` moves.
+- **Dashboard** — new **Market** tab: verdict banner, SN21-vs-field cards,
+  percentile-rank-over-time chart, and best/worst-performer tables.
+
 ## 2026-06-04 — Validator weight-copy scan + wallet identification
 
 ### Added

@@ -34,6 +34,11 @@ from subnet_scan import (
     scan_history,
     set_note as scan_set_note,
 )
+from market_sync import (
+    history as market_history,
+    latest as market_latest,
+    run_sync as market_run,
+)
 from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
 from weights_scan import (
@@ -582,6 +587,34 @@ async def api_validator_wallets(_=Depends(require_auth), hotkey: str | None = No
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Market context (all-subnets alpha-price peer comparison) ──────────────────
+
+
+@app.get("/api/market/summary")
+async def api_market_summary(_=Depends(require_auth)):
+    """Latest all-subnets scan: SN21 standing, breadth, cohorts, per-subnet prices."""
+    payload = market_latest()
+    if not payload:
+        return {"error": "No market scan yet — POST /api/market/sync"}
+    return payload
+
+
+@app.get("/api/market/history")
+async def api_market_history(_=Depends(require_auth), days: int = 30):
+    """SN21 percentile-rank / market-breadth history (last N days)."""
+    return market_history(days=days)
+
+
+@app.post("/api/market/sync")
+async def api_market_sync(_=Depends(require_auth)):
+    """Run the all-subnets alpha-price scan now (one chain call; ~10s)."""
+    try:
+        return market_run()
+    except Exception as e:
+        logger.exception("Market scan failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -745,6 +778,13 @@ def scheduled_neurons_daily():
         logger.exception("Scheduled neurons daily snapshot failed")
 
 
+def scheduled_market_sync():
+    try:
+        market_run()
+    except Exception:
+        logger.exception("Scheduled market scan failed")
+
+
 def scheduled_scout_scan():
     try:
         scan_run()
@@ -848,6 +888,12 @@ scheduler.add_job(
     replace_existing=True,
 )
 scheduler.add_job(
+    scheduled_market_sync,
+    CronTrigger(hour=8, minute=5),
+    id="daily_market_scan",
+    replace_existing=True,
+)
+scheduler.add_job(
     scheduled_taostats_sync,
     CronTrigger(hour=8, minute=15),
     id="daily_taostats",
@@ -922,7 +968,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 
