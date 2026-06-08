@@ -35,6 +35,7 @@ SUBNET_DAILY_STORE = DATA_DIR / "subnet_daily.json"
 HOLDERS_STORE = DATA_DIR / "holders_snapshots.json"
 TAOSTATS_STORE = DATA_DIR / "taostats_owner_transfers.json"
 NEURONS_DAILY_STORE = DATA_DIR / "neurons_daily.json"
+MARKET_STORE = DATA_DIR / "subnets_market.json"
 
 RAO_PER_TAO = 1_000_000_000
 
@@ -627,7 +628,7 @@ def _coldkey_movers_window(snapshots: list[dict], window_days: int,
 
 # ── Flags / risks the LLM should weight ──────────────────────────────────────
 
-def _flags(price: dict, movers: dict, owner: dict, burn: dict) -> list[str]:
+def _flags(price: dict, movers: dict, owner: dict, burn: dict, market: dict | None = None) -> list[str]:
     flags: list[str] = []
 
     a_1d = price.get("alpha_1d_pct")
@@ -635,6 +636,23 @@ def _flags(price: dict, movers: dict, owner: dict, burn: dict) -> list[str]:
         flags.append(f"Alpha price down {a_1d:.2f}% in 24h")
     elif a_1d is not None and a_1d >= 5:
         flags.append(f"Alpha price up {a_1d:.2f}% in 24h")
+
+    # Market-relative context: distinguish a real SN21 problem from a market-wide move.
+    if market and market.get("available"):
+        verdict = market.get("verdict")
+        b = market.get("breadth") or {}
+        s = market.get("sn21") or {}
+        if verdict == "sn21_specific":
+            flags.append(
+                f"SN21-SPECIFIC weakness: SN21 in the bottom of the field "
+                f"(move pctile {s.get('move_24h_percentile')}) while the market held "
+                f"(median {b.get('median_move_24h_tao_pct')}% in TAO)"
+            )
+        elif verdict == "market_wide":
+            flags.append(
+                f"Market-wide move (not SN21-specific): {b.get('pct_up_24h')}% of subnets up, "
+                f"median {b.get('median_move_24h_tao_pct')}% in TAO; SN21 in line"
+            )
 
     if movers:
         h_out = movers.get("house_outflows_alpha") or 0
@@ -657,6 +675,39 @@ def _flags(price: dict, movers: dict, owner: dict, burn: dict) -> list[str]:
     return flags
 
 
+def _market_section() -> dict[str, Any]:
+    """
+    SN21's alpha move relative to the whole field (from subnets_market.json).
+    Answers "is it us or the market?" — the composer leads the price line with this.
+    """
+    market = load_json(MARKET_STORE, {}) or {}
+    sn21 = market.get("sn21") or {}
+    breadth = market.get("breadth") or {}
+    cohorts = market.get("cohorts") or {}
+    if not sn21:
+        return {"available": False}
+
+    verdict = sn21.get("verdict")
+    plain = {
+        "market_wide": "Market-wide move — SN21 fell roughly in line with the whole field; not SN21-specific.",
+        "sn21_specific": "SN21-specific — SN21 lagged the field while the market held up. Investigate.",
+        "outperforming": "SN21 outperformed the field today.",
+        "inline": "SN21 moved roughly in line with the field.",
+        "unknown": "Insufficient history to compare (need a prior day's prices).",
+    }.get(verdict, "")
+
+    return {
+        "available": True,
+        "date": market.get("date"),
+        "verdict": verdict,
+        "verdict_plain": plain,
+        "sn21": sn21,
+        "breadth": breadth,
+        "top_decile": cohorts.get("top_decile"),
+        "bottom_decile": cohorts.get("bottom_decile"),
+    }
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def gather() -> dict[str, Any]:
@@ -676,6 +727,7 @@ def gather() -> dict[str, Any]:
     tier = _tier_section()
     emissions = _emissions_section(daily_log)
     trends = _trends_section(subnet_log, daily_log, neurons_daily_series)
+    market = _market_section()
 
     # Multi-window per-coldkey movers (7d, 30d).
     holders_store = load_json(HOLDERS_STORE, {"snapshots": []}) or {}
@@ -710,8 +762,9 @@ def gather() -> dict[str, Any]:
         "emissions": emissions,
         "tier": tier,
         "trends": trends,
+        "market": market,
         "stale_fields": stale,
     }
     out.update(window_movers)  # movers_7d, movers_30d
-    out["flags"] = _flags(price, movers, owner, burn)
+    out["flags"] = _flags(price, movers, owner, burn, market)
     return out

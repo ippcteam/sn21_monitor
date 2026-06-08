@@ -86,7 +86,10 @@ non-100% epoch on the dashboard.
 ├── subnet_notes.json           — manual qualitative overrides per candidate netuid
 ├── weights_scan.json           — latest validator weight-copy / burn scan
 ├── weights_scan_history.json   — daily burn-fraction / copier-count rows (90d)
-└── validator_names.json        — hotkey→operator-name cache (Taostats)
+├── validator_names.json        — hotkey→operator-name cache (Taostats)
+├── subnets_market.json         — latest all-subnets alpha-price scan (SN21 vs field)
+├── subnets_market_history.json — SN21 percentile-rank / breadth rows (365d)
+└── subnets_price_ledger.json   — {date:{netuid:price}} window (14d, for 24h/7d deltas)
 ```
 
 ## Scout — candidate subnet scanner
@@ -173,6 +176,7 @@ oldest available snapshot.
 | Job | When | Source |
 |-----|------|--------|
 | Chain collect (metagraph + prices) | 08:00 | `collector.run_collection` |
+| Market scan (all-subnets alpha price, SN21 vs field) | 08:05 | `market_sync.run_sync` |
 | Taostats owner sync (transfers + balance + price) | 08:15 | `taostats_sync.sync_owner_transfers` |
 | Subnet daily sync (Activity tab data) | 08:30 | `subnet_sync.sync_subnet_daily` |
 | Holders snapshot (Movement tab data) | 08:45 | `holders_sync.sync_holders_snapshot` |
@@ -210,6 +214,8 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `GET /api/weights/scan` — latest validator weight-copy / burn scan (Validators tab)
 - `GET /api/weights/history?days=30` — daily burn-fraction / copier-count rows
 - `GET /api/validator/wallets` — coldkey→stake breakdown for our validator (UID 64)
+- `GET /api/market/summary` — latest all-subnets scan (SN21 standing, breadth, cohorts, per-subnet prices)
+- `GET /api/market/history?days=30` — SN21 percentile-rank / market-breadth rows
 
 ### Write / trigger (auth)
 - `POST /api/collect` — manual chain collect
@@ -223,6 +229,7 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `POST /api/import-data` — upload `daily_log.json` / `owner_ledger.json` (header-key auth)
 - `POST /api/digest/preview?kind=sn21_daily` — compose digest, return text + inputs (no send)
 - `POST /api/digest/send?kind=sn21_daily&force=1` — compose + send via Telegram now
+- `POST /api/market/sync` — run all-subnets alpha-price scan now (one chain call; ~10 s)
 - `POST /api/scan/run` — run Scout scan now (~30 s for the 5-netuid shortlist)
 - `POST /api/scan/notes/{netuid}` — set qualitative override `{ multiplier?, note? }`
 - `DELETE /api/scan/notes/{netuid}` — remove override
