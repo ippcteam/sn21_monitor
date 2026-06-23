@@ -32,7 +32,6 @@ version (subnet(21) emission fields return 0). They remain ESTIMATE / SCENARIO
 knobs — edit them here.
 """
 
-import math
 import sys
 import statistics
 from datetime import datetime, timezone
@@ -173,22 +172,9 @@ def fetch_live_pool(netuid: int = NETUID_SN21) -> dict:
 
 
 # ----------------------------------------------------------------------
-# CORE AMM MATH
+# CORE AMM MATH  (shared with the lab — see lab/amm.py)
 # ----------------------------------------------------------------------
-def price_impact(x: float) -> float:
-    """Fractional price change from selling x = (alpha sold / alpha reserve)."""
-    return (1.0 / (1.0 + x)) ** 2 - 1.0
-
-def overhang_alpha(div_day, share, price, days):
-    """First-order accumulated basket position in SN21 alpha.
-    Ignores buy-side slippage and basket compounding => slightly conservative."""
-    tao_in_per_day = div_day * share
-    alpha_per_day = tao_in_per_day / price
-    return alpha_per_day * days, alpha_per_day, tao_in_per_day
-
-def floor_breach_overhang_ratio(price, floor):
-    """Overhang ratio x at which a FULL one-shot cascade pushes spot to the floor."""
-    return math.sqrt(price / floor) - 1.0
+from lab.amm import price_impact, overhang_alpha, floor_breach_overhang_ratio  # noqa: E402,F401
 
 
 # ----------------------------------------------------------------------

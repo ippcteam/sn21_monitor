@@ -1,0 +1,242 @@
+"""
+Scenarios S1..S5 (§4.4) — pure functions over a ChainState.
+
+Each returns a JSON-safe dict: `table` (rows to chart/tabulate), `summary`
+(plain-language, per the doc's "no math background" requirement), and `inputs`
+(what it was computed from). None of these mutate the ChainState — b-sweeps run
+on shallow copies.
+
+What runs on existing data vs. what the new pulls unlock:
+  S2 burn sweep, S4 extraction, S5 dump-safety  — spot price + burn (always ran)
+  S1 old-vs-new, S3 decay                        — need root_prop (new data layer)
+"""
+
+from __future__ import annotations
+
+import copy
+
+from .amm import price_impact, realized_tao_from_sell
+from . import mechanisms as M
+from .mechanisms import root_reborn_v346_421 as RR
+
+BLOCK_SECONDS = 12
+
+
+def _sn21(state: dict) -> dict:
+    return next(s for s in state["subnets"] if s["netuid"] == state.get("netuid", 21))
+
+
+def _state_with_b(state: dict, b: float) -> dict:
+    s = copy.copy(state)
+    s["sn21_miner_burn"] = b
+    return s
+
+
+def _blocks_per_day(state: dict) -> float:
+    tempo = (_sn21(state).get("tempo") or 360)
+    # emission accrues per block; tempo is the scoring cadence. Use seconds/block.
+    return 86400.0 / BLOCK_SECONDS
+
+
+# ── S1 — old vs new at activation ────────────────────────────────────────────
+def s1_old_vs_new(state: dict) -> dict:
+    inc = M.get("incumbent")
+    new = M.get("root_reborn_v346_421")
+    share_old = M.emission_share(inc, state)
+    share_new = M.emission_share(new, state)
+    ratio = (share_new / share_old) if share_old > 0 else None
+    return {
+        "table": [
+            {"mechanism": "incumbent", "sn21_emission_share_pct": round(share_old * 100, 5)},
+            {"mechanism": "root_reborn", "sn21_emission_share_pct": round(share_new * 100, 5)},
+        ],
+        "inputs": {"b": state.get("sn21_miner_burn"), "block": state.get("block")},
+        "summary": (
+            f"At current burn b={state.get('sn21_miner_burn')}, SN21's modelled emission "
+            f"share goes from {share_old*100:.4f}% (incumbent) to {share_new*100:.4f}% "
+            f"(Root Reborn)" + (f" — {ratio:.2f}x." if ratio else ".")
+        ),
+        "trust_note": "Absolute owner emission needs the network TAO-emission anchor; "
+                      "shares are robust. Incumbent number only as good as the reproduction gate.",
+    }
+
+
+# ── S2 — burn sweep → target b (decision D-Q) ────────────────────────────────
+def s2_burn_sweep(state: dict, steps: int = 16) -> dict:
+    new = M.get("root_reborn_v346_421")
+    b_now = state.get("sn21_miner_burn") or 0.0
+    share_now = M.emission_share(new, _state_with_b(state, b_now))
+    share_b0 = M.emission_share(new, _state_with_b(state, 0.0))  # un-burned maximum
+    rows = []
+    for i in range(steps + 1):
+        b = i / steps
+        share = M.emission_share(new, _state_with_b(state, b))
+        rows.append({
+            "b": round(b, 4),
+            "sn21_emission_share_pct": round(share * 100, 6),
+            # robust at b=1 (where share_now may be 0): always index off the b=0 max
+            "share_vs_no_burn": round(share / share_b0, 4) if share_b0 > 0 else None,
+            "share_vs_current": round(share / share_now, 4) if share_now > 0 else None,
+        })
+    return {
+        "table": rows,
+        "inputs": {"b_current": round(b_now, 4),
+                   "share_current_pct": round(share_now * 100, 6),
+                   "share_no_burn_pct": round(share_b0 * 100, 6)},
+        "summary": (
+            f"Owner emission scales with (1-b). At the current burn b={b_now:.2f} SN21's "
+            f"emission share is {share_now*100:.4f}%; un-burned (b=0) it would be "
+            f"{share_b0*100:.4f}% — the full recoverable slice. The curve is the input to "
+            f"the target-burn decision (D-Q)."
+        ),
+    }
+
+
+# ── S3 — youth-allowance decay ───────────────────────────────────────────────
+def s3_decay(state: dict, months: int = 30, ref_burn: float = 0.0) -> dict:
+    """Isolates the root_prop (youth-allowance) fade. Computed at a FIXED reference
+    burn (default b=0) so the structural decay isn't masked by today's burn —
+    today SN21 is at full burn, which would zero every share."""
+    new = M.get("root_reborn_v346_421")
+    base = _state_with_b(state, ref_burn)
+    me = _sn21(base)
+    alpha_per_block = me.get("alpha_out_emission") or 0.0
+    alpha_per_day = alpha_per_block * (86400.0 / BLOCK_SECONDS)
+    A0 = me.get("alpha_issued") or 0.0
+    share_now = M.emission_share(new, base)
+    rows = []
+    for m in range(0, months + 1):
+        A = A0 + alpha_per_day * 30 * m
+        proj = copy.deepcopy(base)
+        pm = _sn21(proj)
+        pm["alpha_issued"] = A
+        rp = RR.root_prop(pm, proj)
+        share = M.emission_share(new, proj)
+        rows.append({
+            "month": m,
+            "alpha_issued": round(A, 0),
+            "root_prop": round(rp, 5),
+            "sn21_emission_share_pct": round(share * 100, 6),
+            "share_vs_now": round(share / share_now, 4) if share_now > 0 else None,
+        })
+    end = rows[-1]
+    rp_now = RR.root_prop(me, base)
+    return {
+        "table": rows,
+        "inputs": {"A0": round(A0, 0), "alpha_per_day": round(alpha_per_day, 1),
+                   "root_prop_now": round(rp_now, 5), "ref_burn": ref_burn},
+        "summary": (
+            f"At the current issuance (~{alpha_per_day:,.0f} alpha/day) and a reference "
+            f"burn b={ref_burn:.2f}, SN21's root_prop fades from {rp_now:.4f} now to "
+            f"{end['root_prop']:.4f} in {months} months — emission share to "
+            f"{end['share_vs_now']}x today. The runway-shape input to the financial "
+            f"model (R-M)."
+        ),
+    }
+
+
+# ── S4 — extraction / slippage ───────────────────────────────────────────────
+def s4_extraction(state: dict, weekly_fracs=(0.005, 0.01, 0.02, 0.05, 0.10)) -> dict:
+    me = _sn21(state)
+    A = me.get("alpha_in") or 0.0          # pool alpha reserve
+    T = me.get("tao_in") or 0.0            # pool TAO reserve
+    spot = me.get("spot_price") or 0.0
+    rows = []
+    for f in weekly_fracs:
+        sold = f * A
+        realized = realized_tao_from_sell(sold, A, T)
+        x = sold / A if A else 0.0
+        rows.append({
+            "weekly_sell_frac_of_reserve": round(f, 4),
+            "alpha_sold": round(sold, 0),
+            "realized_tao": round(realized, 2),
+            "avg_price": round(realized / sold, 8) if sold else None,
+            "price_impact_pct": round(price_impact(x) * 100, 3),
+        })
+    return {
+        "table": rows,
+        "inputs": {"pool_alpha": round(A, 0), "pool_tao": round(T, 0), "spot": round(spot, 8)},
+        "summary": (
+            f"Selling owner alpha into the SN21 pool (depth {A:,.0f} alpha / {T:,.0f} TAO): "
+            f"a 1%-of-reserve weekly sell realises "
+            f"~{rows[1]['realized_tao']:,.0f} TAO at {rows[1]['price_impact_pct']:.2f}% price "
+            f"impact. Pool depth scales with emission_share, so reducing the burn (S2) makes "
+            f"extraction cheaper — the reflexive cost in §2."
+        ),
+    }
+
+
+# ── S5 — dump safety at lower burn ───────────────────────────────────────────
+def s5_dump_safety(state: dict, target_b: float = 0.45,
+                   sell_fracs=(0.0, 0.25, 0.5, 0.75, 1.0)) -> dict:
+    """At a lower burn, miners receive more alpha. Net daily TAO flow into the pool
+    = extra emission-driven TAO injection - extra miner sell pressure (alpha dumped,
+    valued at price). Sweep the fraction of the extra miner alpha that gets dumped;
+    the crossover sell-fraction is the safe-step signal. All in absolute TAO/day."""
+    new = M.get("root_reborn_v346_421")
+    me = _sn21(state)
+    A = me.get("alpha_in") or 0.0
+    T = me.get("tao_in") or 0.0
+    price = me.get("spot_price") or 0.0
+    b_now = state.get("sn21_miner_burn") or 0.0
+    blocks_day = 86400.0 / BLOCK_SECONDS
+
+    share_now = M.emission_share(new, _state_with_b(state, b_now))
+    share_tgt = M.emission_share(new, _state_with_b(state, target_b))
+    extra_share = max(0.0, share_tgt - share_now)
+
+    # network-wide daily TAO injection (sum of per-block tao_in_emission across subnets)
+    net_tao_inj_day = sum((s.get("tao_in_emission") or 0.0) for s in state["subnets"]) * blocks_day
+    extra_injection_tao_day = extra_share * net_tao_inj_day
+
+    # extra miner alpha/day freed by un-burning (scales with the burn reduction)
+    alpha_day = (me.get("alpha_out_emission") or 0.0) * blocks_day
+    extra_miner_alpha_day = alpha_day * max(0.0, (b_now - target_b))
+
+    rows = []
+    for sf in sell_fracs:
+        dumped = extra_miner_alpha_day * sf
+        sell_tao_day = dumped * price          # TAO/day of sell pressure
+        net_tao_day = extra_injection_tao_day - sell_tao_day
+        rows.append({
+            "miner_sell_fraction": round(sf, 3),
+            "extra_miner_alpha_dumped_day": round(dumped, 0),
+            "extra_injection_tao_day": round(extra_injection_tao_day, 2),
+            "sell_pressure_tao_day": round(sell_tao_day, 2),
+            "net_tao_day": round(net_tao_day, 2),
+            "net_positive": net_tao_day >= 0,
+        })
+    safe = [r for r in rows if r["net_positive"]]
+    max_safe_sf = max((r["miner_sell_fraction"] for r in safe), default=0.0)
+    return {
+        "table": rows,
+        "inputs": {"target_b": target_b, "b_now": round(b_now, 4),
+                   "share_now_pct": round(share_now * 100, 6),
+                   "share_target_pct": round(share_tgt * 100, 6),
+                   "extra_injection_tao_day": round(extra_injection_tao_day, 2)},
+        "summary": (
+            f"Cutting burn {b_now:.2f}->{target_b:.2f} raises SN21's emission share "
+            f"{share_now*100:.4f}%->{share_tgt*100:.4f}% (~{extra_injection_tao_day:,.0f} "
+            f"extra TAO/day into the pool). Net pool flow stays positive while miners dump "
+            f"up to ~{max_safe_sf:.0%} of the extra alpha — the safe-step input (R-Q)."
+        ),
+    }
+
+
+ALL = {
+    "S1": s1_old_vs_new,
+    "S2": s2_burn_sweep,
+    "S3": s3_decay,
+    "S4": s4_extraction,
+    "S5": s5_dump_safety,
+}
+
+
+def run_all(state: dict) -> dict:
+    out = {}
+    for key, fn in ALL.items():
+        try:
+            out[key] = fn(state)
+        except Exception as e:  # noqa: BLE001
+            out[key] = {"error": f"{type(e).__name__}: {e}"}
+    return out

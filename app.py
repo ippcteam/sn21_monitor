@@ -53,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 _backfill_lock = threading.Lock()
 _backfill_running = False
+_lab_lock = threading.Lock()
+_lab_running = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
@@ -628,6 +630,85 @@ def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
             _backfill_running = False
 
 
+# ── Emission Lab (model proposed mechanisms vs live SN21 state) ───────────────
+
+
+def _lab_run_worker(version: str) -> None:
+    global _lab_running
+    try:
+        from lab.runner import run_lab
+
+        run_lab(version=version, live=True, persist=True)
+    except Exception:
+        logger.exception("Lab run failed")
+    finally:
+        with _lab_lock:
+            _lab_running = False
+
+
+@app.get("/api/lab/mechanisms")
+async def api_lab_mechanisms(_=Depends(require_auth)):
+    """Registered emission mechanisms (incumbent + proposed)."""
+    from lab import store as lab_store
+    return {"mechanisms": lab_store.registry_meta()}
+
+
+@app.get("/api/lab/runs")
+async def api_lab_runs(_=Depends(require_auth), limit: int = 50):
+    """Historical lab-run log (most recent first) — the decision record."""
+    from lab import store as lab_store
+    return {"runs": lab_store.list_runs(limit=limit), "running": _lab_running}
+
+
+@app.get("/api/lab/latest")
+async def api_lab_latest(_=Depends(require_auth)):
+    """Latest full lab run (reproduction gate + all scenarios)."""
+    from lab import store as lab_store
+    run = lab_store.latest_run()
+    if not run:
+        return {"error": "No lab run yet — POST /api/lab/run"}
+    return run
+
+
+@app.get("/api/lab/run/{run_id}")
+async def api_lab_run_detail(run_id: str, _=Depends(require_auth)):
+    """Full detail of one historical lab run."""
+    from lab import store as lab_store
+    run = lab_store.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"No lab run {run_id}")
+    return run
+
+
+@app.post("/api/lab/watch")
+async def api_lab_watch(notify: bool = False, _=Depends(require_auth)):
+    """Check subtensor GitHub for a new release now; draft a stub on a new tag.
+    notify=1 also sends the Telegram notice."""
+    from lab.watcher import check_for_updates
+    try:
+        return check_for_updates(notify=notify)
+    except Exception as e:
+        logger.exception("Lab watch failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/lab/run")
+async def api_lab_run(version: str = "root_reborn_v346_421", _=Depends(require_auth)):
+    """Run the lab now in the background (~30-60s: chain pull + reproduction + scenarios)."""
+    from lab.mechanisms import REGISTRY
+    if version not in REGISTRY:
+        raise HTTPException(status_code=400, detail=f"Unknown mechanism: {version}")
+    global _lab_running
+    with _lab_lock:
+        if _lab_running:
+            raise HTTPException(status_code=409, detail="Lab run already in progress")
+        _lab_running = True
+    threading.Thread(
+        target=_lab_run_worker, args=(version,), daemon=True, name="sn21-lab-run",
+    ).start()
+    return {"queued": True, "version": version}
+
+
 @app.post("/api/backfill")
 async def api_backfill(
     start: str | None = None,
@@ -799,6 +880,22 @@ def scheduled_weights_scan():
         logger.exception("Scheduled weights scan failed")
 
 
+def scheduled_lab_run():
+    try:
+        from lab.runner import run_lab
+        run_lab(version="root_reborn_v346_421", live=True, persist=True)
+    except Exception:
+        logger.exception("Scheduled lab run failed")
+
+
+def scheduled_lab_watch():
+    try:
+        from lab.watcher import check_for_updates
+        check_for_updates()
+    except Exception:
+        logger.exception("Scheduled lab watch failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -927,6 +1024,18 @@ scheduler.add_job(
     scheduled_weights_scan,
     CronTrigger(hour=9, minute=20),
     id="daily_weights_scan",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_lab_run,
+    CronTrigger(hour=9, minute=25),
+    id="daily_lab_run",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_lab_watch,
+    CronTrigger(hour="*/6", minute=10),
+    id="lab_watch",
     replace_existing=True,
 )
 for _kind, _cfg in DIGESTS.items():

@@ -490,6 +490,7 @@
     <button class="tab-btn" data-tab="validators">Validators</button>
     <button class="tab-btn" data-tab="movement">Movement</button>
     <button class="tab-btn" data-tab="market">Market</button>
+    <button class="tab-btn" data-tab="lab">Lab</button>
   </nav>
   <div class="topbar-right">
     <span class="last-update" id="lastUpdate">—</span>
@@ -727,6 +728,50 @@
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
   </section><!-- /market -->
+
+  <section class="tab-panel" data-panel="lab">
+    <div class="section-label">
+      Emission Lab · model proposed Bittensor mechanisms vs live SN21 state
+      <span id="labMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <select id="labMechanism" style="margin-left:auto;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.3rem 0.5rem;font-family:inherit;font-size:0.7rem"></select>
+      <button class="btn-sm primary" onclick="triggerLabRun()" title="Pull live chain state, run the reproduction gate + scenarios S1–S5 (~30–60s)">Run lab (~45s)</button>
+    </div>
+
+    <div id="labGateBanner" class="alert-banner" style="margin-top:0.75rem"></div>
+
+    <div class="cards-grid" id="labCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-header"><span class="chart-title">S2 · owner emission vs burn b (share of network)</span></div>
+        <div class="chart-canvas-wrap"><canvas id="chartLabBurn"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><span class="chart-title">S3 · youth-allowance (root_prop) decay, 30 mo</span></div>
+        <div class="chart-canvas-wrap"><canvas id="chartLabDecay"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><span class="chart-title">S4 · extraction: realized TAO vs weekly sell size</span></div>
+        <div class="chart-canvas-wrap"><canvas id="chartLabExtract"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><span class="chart-title">S5 · dump safety: net pool TAO/day vs miner sell-fraction</span></div>
+        <div class="chart-canvas-wrap"><canvas id="chartLabDump"></canvas></div>
+      </div>
+    </div>
+
+    <div class="section-label">Scenario summaries</div>
+    <div class="table-card" id="labScenarios">
+      <div class="no-data"><strong>No lab run yet</strong><span>Run the lab to model the selected mechanism against live SN21 state. <button class="btn-sm" onclick="triggerLabRun()">Run lab</button></span></div>
+    </div>
+
+    <div class="section-label">Run history · the decision log</div>
+    <div class="table-card" id="labHistory">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </section><!-- /lab -->
 
 </main>
 
@@ -1625,14 +1670,195 @@ async function triggerMarketScan() {
 }
 
 /* ── Tab switching ─────────────────────────────────────────────── */
-const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false, market: false };
+const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false, market: false, lab: false };
 const _tabLoaders = {
   activity:   () => loadActivityTab(),
   neurons:    () => loadNeuronsTab(),
   validators: () => loadValidatorsTab(),
   movement:   () => loadMovementTab(),
   market:     () => loadMarketTab(),
+  lab:        () => loadLabTab(),
 };
+
+/* ── Emission Lab tab ─────────────────────────────────────────── */
+let _labMechLoaded = false;
+
+async function loadLabMechanisms() {
+  if (_labMechLoaded) return;
+  try {
+    const r = await fetch('/api/lab/mechanisms');
+    const d = await r.json();
+    const sel = document.getElementById('labMechanism');
+    sel.innerHTML = (d.mechanisms || [])
+      .filter(m => m.id !== 'incumbent')
+      .map(m => `<option value="${m.id}" title="${(m.notes||'').replace(/"/g,'&quot;')}">${m.label}</option>`)
+      .join('');
+    _labMechLoaded = true;
+  } catch (e) { console.error('lab mechanisms load failed', e); }
+}
+
+async function loadLabTab() {
+  await loadLabMechanisms();
+  await loadLabHistory();
+  try {
+    const r = await fetch('/api/lab/latest');
+    const d = await r.json();
+    if (d.error) {
+      document.getElementById('labCards').innerHTML =
+        `<div class="no-data"><strong>${d.error}</strong><span>Pulls live chain state, runs the reproduction gate and scenarios S1–S5. <button class="btn-sm" onclick="triggerLabRun()">Run lab</button></span></div>`;
+      document.getElementById('labGateBanner').className = 'alert-banner';
+      return;
+    }
+    renderLabRun(d);
+  } catch (e) { console.error('lab latest load failed', e); }
+}
+
+function renderLabRun(d) {
+  const rep = d.reproduction || {};
+  const banner = document.getElementById('labGateBanner');
+  const pass = !!rep.passed;
+  banner.className = 'alert-banner show ' + (pass ? '' : 'alert-drop');
+  banner.innerHTML =
+    `<span class="burn-pill" style="background:${pass ? 'var(--green)' : 'var(--red)'}">REPRODUCTION GATE ${pass ? 'PASS ✓' : 'FAIL ✗'}</span>
+     <span>Modelled SN21 emission ${fmtPct(rep.modeled_share_pct, 4)}% vs chain actual ${fmtPct(rep.actual_share_pct, 4)}%
+     (rel. error ${rep.relative_error != null ? (rep.relative_error*100).toFixed(1)+'%' : '—'}, tol ${rep.tolerance != null ? (rep.tolerance*100).toFixed(0)+'%' : '—'}).
+     ${pass ? 'Scenarios are trusted.' : 'Scenarios are DIRECTIONAL ONLY until the exact source formula is confirmed (Action 1).'}</span>`;
+
+  const cs = d.chain_state || {};
+  document.getElementById('labMeta').textContent =
+    ' · ' + (d.mechanism_label || d.mechanism_version) + ' · block ' + fmtInt(d.block) +
+    ' · ' + (d.fetched_at_utc || '').replace('T',' ').slice(0,16) + ' UTC';
+
+  document.getElementById('labCards').innerHTML = [
+    labCard('Current burn b', cs.sn21_miner_burn != null ? cs.sn21_miner_burn.toFixed(2) : '—'),
+    labCard('tao_weight', cs.tao_weight != null ? cs.tao_weight.toFixed(4) : '—'),
+    labCard('root_prop (now)', (d.scenarios?.S3?.inputs?.root_prop_now ?? '—')),
+    labCard('Trusted', d.trusted ? 'yes ✓' : 'no ✗'),
+  ].join('');
+
+  const S = d.scenarios || {};
+  buildLabCharts(S);
+
+  document.getElementById('labScenarios').innerHTML =
+    `<div class="table-wrap"><table><thead><tr><th>Scenario</th><th>Read</th></tr></thead><tbody>` +
+    [['S1','Old vs new'],['S2','Burn sweep → target b (D-Q)'],['S3','Youth-allowance decay (R-M)'],
+     ['S4','Extraction economics'],['S5','Dump safety / safe step (R-Q)']]
+      .map(([k,label]) => {
+        const sc = S[k] || {};
+        const txt = sc.error ? `<span style="color:var(--red)">${sc.error}</span>` : (sc.summary || '—');
+        return `<tr><td style="white-space:nowrap"><strong>${k}</strong> <span style="color:var(--muted)">${label}</span></td><td>${txt}</td></tr>`;
+      }).join('') +
+    `</tbody></table></div>`;
+}
+
+function labCard(label, val) {
+  return `<div class="card"><div class="card-label">${label}</div><div class="card-value">${val}</div></div>`;
+}
+
+function _labCtx(id) {
+  if (charts[id]) charts[id].destroy();
+  return document.getElementById(id).getContext('2d');
+}
+
+function buildLabCharts(S) {
+  const opts = JSON.parse(JSON.stringify(CHART_DEFAULTS));
+  // S2 burn sweep
+  if (S.S2 && S.S2.table) {
+    const t = S.S2.table;
+    charts['chartLabBurn'] = new Chart(_labCtx('chartLabBurn'), {
+      type: 'line',
+      data: { labels: t.map(r => r.b.toFixed(2)), datasets: [{
+        label: 'SN21 share %', data: t.map(r => r.sn21_emission_share_pct),
+        borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.15)', fill: true, tension: 0.25, pointRadius: 2,
+      }]},
+      options: opts,
+    });
+  }
+  // S3 decay
+  if (S.S3 && S.S3.table) {
+    const t = S.S3.table;
+    charts['chartLabDecay'] = new Chart(_labCtx('chartLabDecay'), {
+      type: 'line',
+      data: { labels: t.map(r => 'm'+r.month), datasets: [{
+        label: 'root_prop', data: t.map(r => r.root_prop),
+        borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)', fill: true, tension: 0.25, pointRadius: 0,
+      }]},
+      options: opts,
+    });
+  }
+  // S4 extraction
+  if (S.S4 && S.S4.table) {
+    const t = S.S4.table;
+    charts['chartLabExtract'] = new Chart(_labCtx('chartLabExtract'), {
+      type: 'bar',
+      data: { labels: t.map(r => (r.weekly_sell_frac_of_reserve*100).toFixed(1)+'%'), datasets: [{
+        label: 'realized TAO', data: t.map(r => r.realized_tao),
+        backgroundColor: 'rgba(59,130,246,0.45)', borderColor: '#3b82f6', borderWidth: 1,
+      }]},
+      options: opts,
+    });
+  }
+  // S5 dump safety
+  if (S.S5 && S.S5.table) {
+    const t = S.S5.table;
+    charts['chartLabDump'] = new Chart(_labCtx('chartLabDump'), {
+      type: 'bar',
+      data: { labels: t.map(r => (r.miner_sell_fraction*100).toFixed(0)+'%'), datasets: [{
+        label: 'net pool TAO/day', data: t.map(r => r.net_tao_day),
+        backgroundColor: t.map(r => r.net_positive ? 'rgba(16,185,129,0.45)' : 'rgba(239,68,68,0.45)'),
+        borderColor: t.map(r => r.net_positive ? '#10b981' : '#EF4444'), borderWidth: 1,
+      }]},
+      options: opts,
+    });
+  }
+}
+
+async function loadLabHistory() {
+  const el = document.getElementById('labHistory');
+  try {
+    const r = await fetch('/api/lab/runs?limit=40');
+    const d = await r.json();
+    const runs = d.runs || [];
+    if (!runs.length) { el.innerHTML = `<div class="no-data"><strong>No runs yet</strong><span>The lab also runs automatically at 09:25 UTC daily.</span></div>`; return; }
+    el.innerHTML = `<div class="table-wrap"><table><thead><tr>
+      <th>When (UTC)</th><th>Block</th><th>Mechanism</th><th>Gate</th><th>Headline</th></tr></thead><tbody>` +
+      runs.map(rn => {
+        const rep = rn.reproduction || {};
+        const gate = rep.passed
+          ? `<span style="color:var(--green)">PASS</span>`
+          : `<span style="color:var(--red)">FAIL</span>`;
+        const err = rep.relative_error != null ? ` <span style="color:var(--muted)">${(rep.relative_error*100).toFixed(1)}%</span>` : '';
+        return `<tr><td style="white-space:nowrap">${(rn.fetched_at_utc||'').replace('T',' ').slice(0,16)}</td>
+          <td>${fmtInt(rn.block)}</td><td>${rn.mechanism_version||'—'}</td><td>${gate}${err}</td>
+          <td style="color:var(--muted);font-size:0.7rem">${rn.headline||'—'}</td></tr>`;
+      }).join('') + `</tbody></table></div>`;
+  } catch (e) { el.innerHTML = `<div class="no-data">history load failed</div>`; }
+}
+
+async function triggerLabRun() {
+  const btn = event && event.target;
+  const version = document.getElementById('labMechanism').value || 'root_reborn_v346_421';
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  try {
+    const r = await fetch('/api/lab/run?version=' + encodeURIComponent(version), { method: 'POST', credentials: 'same-origin' });
+    if (r.status === 409) { if (btn) btn.textContent = 'Already running…'; }
+    // poll until the background run finishes
+    const napMs = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < 60; i++) {
+      await napMs(2000);
+      const s = await fetch('/api/lab/runs?limit=1').then(x => x.json()).catch(() => ({}));
+      if (s && s.running === false) break;
+    }
+    _tabLoaded.lab = false;
+    await loadLabTab();
+    if (btn) btn.textContent = 'Done ✓';
+  } catch (e) {
+    console.error('lab run failed', e);
+    if (btn) btn.textContent = 'Failed';
+  } finally {
+    if (btn) setTimeout(() => { btn.disabled = false; btn.textContent = 'Run lab (~45s)'; }, 1500);
+  }
+}
 
 /* ── Activity tab loader ─────────────────────────────────────── */
 function fmtInt(n) {
