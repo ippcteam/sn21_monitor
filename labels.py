@@ -28,11 +28,24 @@ WALLET_LABELS_STORE = DATA_DIR / "wallet_labels.json"
 HOUSE_LABEL = "house"
 VALID_KINDS = {"coldkey", "hotkey"}
 
+# Known in-house keys, version-controlled so they are marked House on every
+# instance (incl. production's /data disk) without env/dashboard fiddling. Each
+# is ensured-present on load unless explicitly removed via remove_label (tracked
+# in store["removed"], so the dashboard "unstar" still sticks). Confirmed against
+# the SN21 metagraph 2026-06-24.
+DEFAULT_HOUSE_KEYS: list[tuple[str, str, str]] = [
+    ("hotkey",  "5G6N3zP3h42qF3xHfFvy8qqu1ZQQh9n7GegctfPFjfuPdxDf", "in-house miner UID 1"),
+    ("hotkey",  "5DemVP2S5LpdnCk4VoewRPRJDvVTYuZ5c4Kqcf7S46ChfwHT", "in-house miner UID 166"),
+    ("hotkey",  "5Gx5Vu9qXtwrcz78NKrMrq8iSGj1UXvEV3ZhddWirea5gA5e", "in-house miner UID 154"),
+    ("coldkey", "5F9i7LjCW6C8ExBy3mH9jWDWwAwPwCg5UdzY2WzzTHS8LQjH", "in-house miner coldkey (UID 1 & 166)"),
+    ("coldkey", "5DJ1wjWyfKo2mpiV8mGBdXzEsJweG63xVfWiejdDqrvyQ5vs", "in-house miner coldkey (UID 154)"),
+]
+
 _lock = threading.Lock()
 
 
 def _empty_store() -> dict[str, Any]:
-    return {"labels": {}, "seeded_from_env": False}
+    return {"labels": {}, "seeded_from_env": False, "removed": []}
 
 
 def _normalise_store(store: Any) -> dict[str, Any]:
@@ -42,7 +55,28 @@ def _normalise_store(store: Any) -> dict[str, Any]:
         store["labels"] = {}
     if "seeded_from_env" not in store:
         store["seeded_from_env"] = False
+    if "removed" not in store or not isinstance(store["removed"], list):
+        store["removed"] = []
     return store
+
+
+def _ensure_defaults(store: dict[str, Any]) -> bool:
+    """Add any known in-house keys not already present and not explicitly removed.
+    Idempotent union — never deletes. Returns True if anything was added."""
+    removed = set(store.get("removed", []))
+    now = datetime.now(timezone.utc).isoformat()
+    added = False
+    for kind, ss58, note in DEFAULT_HOUSE_KEYS:
+        if ss58 in store["labels"] or ss58 in removed:
+            continue
+        store["labels"][ss58] = {
+            "kind": kind,
+            "label": HOUSE_LABEL,
+            "note": note,
+            "added_at": now,
+        }
+        added = True
+    return added
 
 
 def _load() -> dict[str, Any]:
@@ -90,10 +124,11 @@ def load_labels() -> dict[str, Any]:
     """Load store and apply env seed once."""
     with _lock:
         store = _load()
-        if _seed_from_env(store):
-            _save(store)
+        changed = _seed_from_env(store)
+        if changed:
             logger.info("wallet_labels seeded from env (HOUSE_COLDKEYS/HOUSE_HOTKEYS)")
-        elif not WALLET_LABELS_STORE.exists():
+        changed = _ensure_defaults(store) or changed
+        if changed or not WALLET_LABELS_STORE.exists():
             _save(store)
         return store
 
@@ -120,6 +155,8 @@ def set_label(ss58: str, kind: str, note: str | None = None) -> dict[str, Any]:
             "note": (note or "").strip() or None,
             "added_at": datetime.now(timezone.utc).isoformat(),
         }
+        if ss58 in store["removed"]:
+            store["removed"].remove(ss58)
         _save(store)
         return {"ss58": ss58, **store["labels"][ss58]}
 
@@ -131,7 +168,10 @@ def remove_label(ss58: str) -> bool:
         existed = ss58 in store["labels"]
         if existed:
             del store["labels"][ss58]
-            _save(store)
+        # Record removal so a default in-house key isn't re-added on next load.
+        if ss58 not in store["removed"]:
+            store["removed"].append(ss58)
+        _save(store)
         return existed
 
 
