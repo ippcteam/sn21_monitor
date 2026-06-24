@@ -739,6 +739,11 @@
 
     <div id="labGateBanner" class="alert-banner" style="margin-top:0.75rem"></div>
 
+    <div class="section-label">Recommended actions · goal: ↑ alpha price + owner alpha · avoid dereg / emission-blocking</div>
+    <div class="table-card" id="labRecommend">
+      <div class="no-data"><strong>No lab run yet</strong><span>Run the lab to generate goal-aligned recommendations.</span></div>
+    </div>
+
     <div class="cards-grid" id="labCards">
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
@@ -1736,6 +1741,8 @@ function renderLabRun(d) {
     labCard('Trusted', d.trusted ? 'yes ✓' : 'no ✗'),
   ].join('');
 
+  renderLabRecommend(d.recommendations || null, !!rep.passed);
+
   const S = d.scenarios || {};
   buildLabCharts(S);
 
@@ -1753,6 +1760,41 @@ function renderLabRun(d) {
 
 function labCard(label, val) {
   return `<div class="card"><div class="card-label">${label}</div><div class="card-value">${val}</div></div>`;
+}
+
+function _riskColor(level) {
+  return level === 'low' ? 'var(--green)' : level === 'medium' ? 'var(--amber)'
+       : level === 'high' ? 'var(--red)' : 'var(--muted)';
+}
+
+function renderLabRecommend(rec, gatePass) {
+  const el = document.getElementById('labRecommend');
+  if (!rec) { el.innerHTML = `<div class="no-data"><strong>No recommendations</strong></div>`; return; }
+  const trustWarn = gatePass ? '' :
+    `<div class="alert-banner show alert-drop" style="margin:0 0 0.75rem">
+       <span>⚠ Reproduction gate did not pass — treat magnitudes as DIRECTIONAL only (Action 1 outstanding).</span></div>`;
+  const risks = (rec.risks || []).map(r =>
+    `<span style="display:inline-block;margin-right:1rem"><span class="burn-pill" style="background:${_riskColor(r.level)}">${r.level.toUpperCase()}</span> ${r.name}</span>`
+  ).join('');
+  const rows = (rec.actions || []).map(a => `
+    <tr>
+      <td style="white-space:nowrap;vertical-align:top"><strong>${a.priority}. ${a.lever}</strong></td>
+      <td>
+        <div style="font-weight:500">${a.action}</div>
+        <div style="color:var(--muted);font-size:0.7rem;margin-top:0.25rem">
+          price: ${a.effect_price} · owner alpha: ${a.effect_owner_alpha}<br>
+          guardrail: ${a.guardrail}<br>
+          <em>confidence: ${a.confidence}</em>
+        </div>
+      </td>
+    </tr>`).join('');
+  el.innerHTML =
+    trustWarn +
+    `<div style="padding:0.75rem 1rem;font-size:0.85rem;line-height:1.5;border-bottom:1px solid var(--border)">
+       <strong style="color:var(--text)">Verdict.</strong> ${rec.verdict}
+     </div>
+     <div style="padding:0.6rem 1rem;border-bottom:1px solid var(--border)">${risks}</div>
+     <div class="table-wrap"><table><thead><tr><th>Action</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function _labCtx(id) {

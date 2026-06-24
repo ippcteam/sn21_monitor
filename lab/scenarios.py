@@ -14,12 +14,26 @@ What runs on existing data vs. what the new pulls unlock:
 from __future__ import annotations
 
 import copy
+import math
 
 from .amm import price_impact, realized_tao_from_sell
 from . import mechanisms as M
 from .mechanisms import root_reborn_v346_421 as RR
 
 BLOCK_SECONDS = 12
+
+# ── Operator guardrails (the risks to avoid). Tune via env/source confirmation. ──
+DEREG_FLOOR_TAO = 0.0035          # assumed deregistration price floor (R-C; confirm)
+DEREG_HEADROOM_MIN = 0.15         # want spot >= 15% above the floor
+MAX_WEEKLY_PRICE_IMPACT = 0.02    # cap a single week's extraction at 2% price impact
+
+
+def max_sell_frac_for_impact(max_impact: float) -> float:
+    """Largest sell (fraction of alpha reserve) whose price impact stays within
+    max_impact: (1/(1+x))^2 - 1 >= -max_impact  =>  x <= 1/sqrt(1-max_impact) - 1."""
+    if max_impact <= 0 or max_impact >= 1:
+        return 0.0
+    return 1.0 / math.sqrt(1.0 - max_impact) - 1.0
 
 
 def _sn21(state: dict) -> dict:
@@ -153,32 +167,59 @@ def s4_extraction(state: dict, weekly_fracs=(0.005, 0.01, 0.02, 0.05, 0.10)) -> 
             "avg_price": round(realized / sold, 8) if sold else None,
             "price_impact_pct": round(price_impact(x) * 100, 3),
         })
+    # Max safe weekly extraction: largest sell within the price-impact guardrail AND
+    # keeping spot above the dereg floor + headroom margin.
+    f_impact = max_sell_frac_for_impact(MAX_WEEKLY_PRICE_IMPACT)
+    floor_target = DEREG_FLOOR_TAO * (1.0 + DEREG_HEADROOM_MIN)
+    if spot > 0 and floor_target < spot:
+        # spot_after = spot * (1/(1+x))^2 >= floor_target  =>  x <= sqrt(spot/floor_target) - 1
+        f_floor = math.sqrt(spot / floor_target) - 1.0
+    else:
+        f_floor = 0.0
+    f_opt = max(0.0, min(f_impact, f_floor))
+    opt_alpha = f_opt * A
+    opt_tao = realized_tao_from_sell(opt_alpha, A, T)
+    binding = "price-impact cap" if f_impact <= f_floor else "dereg-floor headroom"
+    optimal = {
+        "weekly_sell_frac_of_reserve": round(f_opt, 5),
+        "alpha_per_week": round(opt_alpha, 0),
+        "realized_tao_per_week": round(opt_tao, 2),
+        "price_impact_pct": round(price_impact(f_opt) * 100, 3),
+        "binding_constraint": binding,
+        "spot_after": round(spot * (1 + price_impact(f_opt)), 8),
+    }
     return {
         "table": rows,
-        "inputs": {"pool_alpha": round(A, 0), "pool_tao": round(T, 0), "spot": round(spot, 8)},
+        "optimal": optimal,
+        "inputs": {"pool_alpha": round(A, 0), "pool_tao": round(T, 0), "spot": round(spot, 8),
+                   "dereg_floor": DEREG_FLOOR_TAO, "max_weekly_impact": MAX_WEEKLY_PRICE_IMPACT},
         "summary": (
-            f"Selling owner alpha into the SN21 pool (depth {A:,.0f} alpha / {T:,.0f} TAO): "
-            f"a 1%-of-reserve weekly sell realises "
-            f"~{rows[1]['realized_tao']:,.0f} TAO at {rows[1]['price_impact_pct']:.2f}% price "
-            f"impact. Pool depth scales with emission_share, so reducing the burn (S2) makes "
-            f"extraction cheaper — the reflexive cost in §2."
+            f"Pool depth {A:,.0f} alpha / {T:,.0f} TAO. Max SAFE weekly extraction is "
+            f"~{opt_alpha:,.0f} alpha ({f_opt*100:.2f}% of reserve) → ~{opt_tao:,.0f} TAO at "
+            f"{optimal['price_impact_pct']:.2f}% impact (bound by {binding}). Reducing the burn "
+            f"(S2) deepens the pool and raises this ceiling — the reflexive lever in §2."
         ),
     }
 
 
 # ── S5 — dump safety at lower burn ───────────────────────────────────────────
-def s5_dump_safety(state: dict, target_b: float = 0.45,
+def s5_dump_safety(state: dict, target_b: float | None = None, step: float = 0.10,
                    sell_fracs=(0.0, 0.25, 0.5, 0.75, 1.0)) -> dict:
-    """At a lower burn, miners receive more alpha. Net daily TAO flow into the pool
-    = extra emission-driven TAO injection - extra miner sell pressure (alpha dumped,
-    valued at price). Sweep the fraction of the extra miner alpha that gets dumped;
-    the crossover sell-fraction is the safe-step signal. All in absolute TAO/day."""
+    """Is the NEXT burn REDUCTION safe? At a lower burn miners receive more alpha;
+    net daily TAO flow into the pool = extra emission-driven TAO injection - extra
+    miner sell pressure (alpha dumped, valued at price). Sweep the fraction of the
+    extra miner alpha that gets dumped; the crossover is the safe-step signal.
+
+    target_b defaults to one `step` BELOW the current burn (a reduction), so the
+    scenario is always direction-correct regardless of where the operator is today."""
     new = M.get("root_reborn_v346_421")
     me = _sn21(state)
     A = me.get("alpha_in") or 0.0
     T = me.get("tao_in") or 0.0
     price = me.get("spot_price") or 0.0
     b_now = state.get("sn21_miner_burn") or 0.0
+    if target_b is None:
+        target_b = max(0.0, b_now - step)
     blocks_day = 86400.0 / BLOCK_SECONDS
 
     share_now = M.emission_share(new, _state_with_b(state, b_now))

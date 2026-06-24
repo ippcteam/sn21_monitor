@@ -99,8 +99,9 @@ def run_lab(version: str = DEFAULT_VERSION, live: bool = True,
     gate = reproduction_gate(state, tolerance)
     scen = SC.run_all(state)
 
-    s2 = scen.get("S2", {})
-    headline = s2.get("summary") if isinstance(s2, dict) else None
+    from .recommend import build_recommendations
+    recs = build_recommendations(state, scen)
+    headline = recs.get("verdict")
 
     record = {
         "fetched_at_utc": state.get("fetched_at_utc") or store.now_iso(),
@@ -112,6 +113,7 @@ def run_lab(version: str = DEFAULT_VERSION, live: bool = True,
         "reproduction": gate,
         "chain_state": _compact_state(state, version),
         "scenarios": scen,
+        "recommendations": recs,
         "headline": headline,
     }
     if persist:
@@ -146,6 +148,19 @@ def main(argv=None):
         sc = rec["scenarios"].get(key, {})
         summ = sc.get("summary") or sc.get("error") or "—"
         print(f"\n[{key}] {summ}")
+
+    recs = rec.get("recommendations") or {}
+    print("\n" + "=" * 64)
+    print("RECOMMENDED ACTIONS  (goal: ↑ alpha price + owner alpha; avoid dereg/emission-block)")
+    print("=" * 64)
+    print(f"VERDICT: {recs.get('verdict')}")
+    for r in recs.get("risks", []):
+        print(f"  risk · {r['name']}: {r['level'].upper()}")
+    for a in recs.get("actions", []):
+        print(f"\n  [{a['priority']}] {a['lever']}: {a['action']}")
+        print(f"      price={a['effect_price']} · owner_alpha={a['effect_owner_alpha']}")
+        print(f"      guardrail: {a['guardrail']}")
+        print(f"      confidence: {a['confidence']}")
     if not persist:
         print("\n(dry run — pass --live to pull fresh state and append to the log)")
 
