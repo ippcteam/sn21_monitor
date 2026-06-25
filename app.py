@@ -496,6 +496,24 @@ async def api_house_snapshot_now(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/house/miners")
+async def api_house_miners(_=Depends(require_auth)):
+    """In-house miners: alpha holding ('my money') + rolling 4-week earnings & trend."""
+    from house_miners import get_house_miners
+    return get_house_miners()
+
+
+@app.post("/api/house/miners/sync")
+async def api_house_miners_sync(_=Depends(require_auth)):
+    """Rebuild the in-house miners holdings + earnings snapshot now."""
+    try:
+        from house_miners import build_house_miners
+        return build_house_miners()
+    except Exception as e:
+        logger.exception("House miners sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Scout (candidate subnet scanner) ──────────────────────────────────────────
 
 
@@ -880,6 +898,14 @@ def scheduled_weights_scan():
         logger.exception("Scheduled weights scan failed")
 
 
+def scheduled_house_miners():
+    try:
+        from house_miners import build_house_miners
+        build_house_miners()
+    except Exception:
+        logger.exception("Scheduled house-miners snapshot failed")
+
+
 def scheduled_lab_run():
     try:
         from lab.runner import run_lab
@@ -1024,6 +1050,12 @@ scheduler.add_job(
     scheduled_weights_scan,
     CronTrigger(hour=9, minute=20),
     id="daily_weights_scan",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_house_miners,
+    CronTrigger(hour=9, minute=10),
+    id="daily_house_miners",
     replace_existing=True,
 )
 scheduler.add_job(
