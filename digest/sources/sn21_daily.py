@@ -64,6 +64,18 @@ NOTABLE_EXIT_TAO = 5.0
 WINDOW_DAYS = (7, 30)
 TOP_MOVERS_PER_WINDOW = 10
 
+# ── Net-flow signal thresholds (used by the consolidated `flows` block) ───────
+# The raw per-coldkey movers are dominated by validator coldkey rotation
+# (a brand exits one coldkey and re-enters another the same week) and by daily
+# stake/unstake oscillation. To separate signal from churn we aggregate by
+# *brand* (falling back to coldkey) and judge on NET position change, not gross.
+NET_FLOW_MIN_ALPHA = 2000.0       # |net| over the window to count as a real move
+ROTATION_GROSS_MIN_ALPHA = 3000.0  # gross churn that, with small net, = rotation
+HOUSE_NET_MIN_ALPHA = 500.0       # |net| house move worth flagging
+TOP_NET_MOVERS = 6                 # cap on net movers surfaced to the narrator
+# A regime is "full burn-to-owner" at/above this burn rate; below it miners earn.
+FULL_BURN_THRESHOLD_PCT = 99.5
+
 
 def _pct(today: float | int | None, prior: float | int | None) -> float | None:
     if today is None or not prior:
@@ -626,16 +638,173 @@ def _coldkey_movers_window(snapshots: list[dict], window_days: int,
     }
 
 
+# ── Consolidated net flows (brand-aggregated, churn-suppressed) ──────────────
+
+def _flow_group_key(brand: str | None, coldkey: str | None) -> str:
+    """Group rotation across a validator's coldkeys: brand if known, else coldkey."""
+    if brand:
+        return f"brand:{brand}"
+    return f"ck:{coldkey or ''}"
+
+
+def _aggregate_flows(start_snap: dict, today_snap: dict,
+                     house: set[str]) -> dict[str, dict[str, Any]]:
+    """
+    Net position change between two snapshots, grouped by brand (falling back to
+    coldkey). For each group: `net_alpha` (signed, end − start summed across its
+    coldkeys — so a brand rotating coldkeys nets out) and `gross_alpha` (sum of
+    per-coldkey |delta| — large gross with small net == rotation/churn).
+    """
+    start_map = _per_coldkey_balance(start_snap)
+    today_map = _per_coldkey_balance(today_snap)
+
+    groups: dict[str, dict[str, Any]] = {}
+    for ck in set(start_map) | set(today_map):
+        t = today_map.get(ck) or {}
+        p = start_map.get(ck) or {}
+        bal_now = int(t.get("balance_rao") or 0)
+        bal_prev = int(p.get("balance_rao") or 0)
+        if bal_now == 0 and bal_prev == 0:
+            continue
+        delta = (bal_now - bal_prev) / RAO_PER_TAO
+        names = (t.get("hotkey_names") or p.get("hotkey_names") or [])
+        hotkeys = (t.get("hotkeys") or p.get("hotkeys") or [])
+        brand = _label_brand(" ".join(names) if names else None)
+        is_h = any(hk in house for hk in hotkeys) or (ck in house)
+        key = _flow_group_key(brand, ck)
+
+        g = groups.setdefault(key, {
+            "name": brand or (names[0] if names else f"{ck[:8]}…"),
+            "brand": brand,
+            "is_house": False,
+            "net_alpha": 0.0,
+            "gross_alpha": 0.0,
+            "coldkeys": 0,
+            "names": [],
+        })
+        g["net_alpha"] += delta
+        g["gross_alpha"] += abs(delta)
+        g["coldkeys"] += 1
+        g["is_house"] = g["is_house"] or is_h
+        for n in names:
+            if n and n not in g["names"]:
+                g["names"].append(n)
+    # Prefer a real (correctly-cased) holder name over the lowercase brand key.
+    for g in groups.values():
+        if g["names"]:
+            g["name"] = g["names"][0]
+    return groups
+
+
+def _flows_section(snapshots: list[dict], house: set[str], movers: dict) -> dict[str, Any]:
+    """
+    The single canonical flow view: structural holder change + net, brand-level,
+    churn-suppressed movers. Replaces the three overlapping raw-mover blocks.
+    """
+    if len(snapshots) < 2:
+        return {"available": False}
+
+    today = snapshots[-1]
+    prior = snapshots[-2]
+    start7, actual7 = _row_at_offset(snapshots, 7)
+
+    grp_24h = _aggregate_flows(prior, today, house)
+    grp_7d = _aggregate_flows(start7 or prior, today, house) if start7 else {}
+
+    house_net_24h = sum(g["net_alpha"] for g in grp_24h.values() if g["is_house"])
+    house_net_7d = sum(g["net_alpha"] for g in grp_7d.values() if g["is_house"])
+
+    net_movers: list[dict[str, Any]] = []
+    rotation_names: list[str] = []
+    for key, g in grp_7d.items():
+        if g["is_house"]:
+            continue
+        net = g["net_alpha"]
+        gross = g["gross_alpha"]
+        d24 = grp_24h.get(key) or {}
+        net24 = d24.get("net_alpha") or 0.0
+        if abs(net) >= NET_FLOW_MIN_ALPHA:
+            net_movers.append({
+                "name": g["name"],
+                "brand": g["brand"],
+                "net_alpha_7d": round(net, 2),
+                "net_alpha_24h": round(net24, 2),
+                "direction": "in" if net > 0 else "out",
+                # Still moving the same way today → a real trend, not a one-off.
+                "sustained": (net > 0) == (net24 > 0) and abs(net24) > 0,
+                "coldkeys": g["coldkeys"],
+            })
+        elif gross >= ROTATION_GROSS_MIN_ALPHA:
+            rotation_names.append(g["name"])
+
+    net_movers.sort(key=lambda m: abs(m["net_alpha_7d"]), reverse=True)
+
+    return {
+        "available": True,
+        "window_7d_actual_days": actual7 or 0,
+        "from_date": (start7 or prior or {}).get("date"),
+        "to_date": today.get("date"),
+        "holder_count": movers.get("today_holder_count"),
+        "holder_delta": (
+            (movers.get("today_holder_count") or 0) - (movers.get("prior_holder_count") or 0)
+            if movers.get("today_holder_count") is not None
+            and movers.get("prior_holder_count") is not None else None
+        ),
+        "new_positions": movers.get("new_positions"),
+        "exited_positions": movers.get("exited_positions"),
+        "house_net_alpha_24h": round(house_net_24h, 2),
+        "house_net_alpha_7d": round(house_net_7d, 2),
+        "net_movers": net_movers[:TOP_NET_MOVERS],
+        "rotations_suppressed": len(rotation_names),
+        "rotation_examples": sorted(set(rotation_names))[:5],
+    }
+
+
+# ── Owner economics (why we hold the subnet — surfaced first) ────────────────
+
+def _owner_economics_section(emissions: dict, owner: dict, burn: dict,
+                             tier: dict, trends: dict) -> dict[str, Any]:
+    entitled = (trends.get("our_entitled_alpha") or {})
+    owner_share = (trends.get("owner_share_alpha") or {})
+    burn_pct = burn.get("burn_rate_pct")
+    regime = None
+    miner_share = None
+    if burn_pct is not None:
+        if burn_pct >= FULL_BURN_THRESHOLD_PCT:
+            regime = "full burn-to-owner"
+        else:
+            miner_share = round(100.0 - burn_pct, 2)
+            regime = f"miners earning ~{miner_share:.1f}% (off full burn-to-owner)"
+    return {
+        "entitled_alpha_today": emissions.get("our_entitled_alpha"),
+        "entitled_7d_pct": entitled.get("7d_pct"),
+        "entitled_30d_pct": entitled.get("30d_pct"),
+        "owner_share_alpha_today": emissions.get("owner_share_alpha"),
+        "owner_share_7d_pct": owner_share.get("7d_pct"),
+        "owner_pool_alpha": owner.get("alpha_now"),
+        "owner_pool_delta_24h": owner.get("alpha_delta_24h"),
+        "wallet_balance_tao": owner.get("balance_total_tao"),
+        "wallet_change_24h_pct": owner.get("balance_change_24h_pct"),
+        "burn_rate_pct": burn_pct,
+        "burn_regime": regime,
+        "miner_share_pct": miner_share,
+        "burn_7d_pct_change": (trends.get("burn_rate_pct") or {}).get("7d_pct"),
+        "next_tier_date": tier.get("next_tier_date"),
+        "days_to_next_tier": tier.get("days_to_next_tier"),
+        "next_tier_rate_pct": tier.get("next_tier_rate_pct"),
+        "current_rate_pct": tier.get("current_rate_pct"),
+    }
+
+
 # ── Flags / risks the LLM should weight ──────────────────────────────────────
 
-def _flags(price: dict, movers: dict, owner: dict, burn: dict, market: dict | None = None) -> list[str]:
+def _flags(price: dict, flows: dict, owner_econ: dict, market: dict | None = None) -> list[str]:
+    """
+    Only material, non-recurring signals. Crucially uses NET (not gross) flows so
+    routine validator rotation and daily stake oscillation no longer fire a flag
+    every single day.
+    """
     flags: list[str] = []
-
-    a_1d = price.get("alpha_1d_pct")
-    if a_1d is not None and a_1d <= -5:
-        flags.append(f"Alpha price down {a_1d:.2f}% in 24h")
-    elif a_1d is not None and a_1d >= 5:
-        flags.append(f"Alpha price up {a_1d:.2f}% in 24h")
 
     # Market-relative context: distinguish a real SN21 problem from a market-wide move.
     if market and market.get("available"):
@@ -644,7 +813,7 @@ def _flags(price: dict, movers: dict, owner: dict, burn: dict, market: dict | No
         s = market.get("sn21") or {}
         if verdict == "sn21_specific":
             flags.append(
-                f"SN21-SPECIFIC weakness: SN21 in the bottom of the field "
+                f"SN21-SPECIFIC weakness: SN21 near the bottom of the field "
                 f"(move pctile {s.get('move_24h_percentile')}) while the market held "
                 f"(median {b.get('median_move_24h_tao_pct')}% in TAO)"
             )
@@ -654,23 +823,29 @@ def _flags(price: dict, movers: dict, owner: dict, burn: dict, market: dict | No
                 f"median {b.get('median_move_24h_tao_pct')}% in TAO; SN21 in line"
             )
 
-    if movers:
-        h_out = movers.get("house_outflows_alpha") or 0
-        if h_out > 0:
-            flags.append(f"House outflows: {h_out:.2f} α (verify before public visibility)")
-        notable = movers.get("notable_exits") or []
-        brand_exits = [r for r in notable if r.get("brand")]
-        if brand_exits:
-            names = ", ".join(sorted({r["brand"] for r in brand_exits}))
-            flags.append(f"Validator-brand exits: {names}")
-        elif notable:
-            flags.append(f"{len(notable)} notable EXITED position(s) ≥ 1000 α")
+    # Owner accrual — the metric that actually matters for an owned subnet.
+    e7 = owner_econ.get("entitled_7d_pct")
+    if e7 is not None and e7 <= -2:
+        flags.append(f"Owner accrual slipping: entitled α {e7:.2f}% over 7d")
 
-    if owner.get("alpha_delta_24h") is not None and owner["alpha_delta_24h"] < -10:
-        flags.append(f"Owner-pool alpha fell {owner['alpha_delta_24h']:.2f} α in 24h")
+    # Burn regime change away from full burn-to-owner.
+    if owner_econ.get("miner_share_pct") is not None:
+        flags.append(
+            f"Burn at {owner_econ.get('burn_rate_pct'):.2f}% — off full burn-to-owner; "
+            f"miners receiving ~{owner_econ['miner_share_pct']:.1f}%"
+        )
 
-    if burn.get("burn_rate_pct") is not None and burn["burn_rate_pct"] < 100:
-        flags.append(f"Burn rate {burn['burn_rate_pct']:.2f}% — miners receiving alpha")
+    # House NET (not gross) outflow.
+    if flows.get("available"):
+        h_net = flows.get("house_net_alpha_7d")
+        if h_net is not None and h_net <= -HOUSE_NET_MIN_ALPHA:
+            flags.append(f"House net outflow {h_net:.0f} α over 7d (net, not rotation)")
+        # Real net distribution by a non-house holder/brand.
+        big_out = [m for m in (flows.get("net_movers") or [])
+                   if m["direction"] == "out" and abs(m["net_alpha_7d"]) >= NET_FLOW_MIN_ALPHA * 2]
+        if big_out:
+            names = ", ".join(f"{m['name']} {m['net_alpha_7d']:.0f}α" for m in big_out[:3])
+            flags.append(f"Net distribution (7d): {names}")
 
     return flags
 
@@ -729,13 +904,19 @@ def gather() -> dict[str, Any]:
     trends = _trends_section(subnet_log, daily_log, neurons_daily_series)
     market = _market_section()
 
-    # Multi-window per-coldkey movers (7d, 30d).
+    # Multi-window per-coldkey movers (7d, 30d). Kept for the dashboard / drill-down;
+    # the narrated digest now leads with the consolidated `flows` block instead.
     holders_store = load_json(HOLDERS_STORE, {"snapshots": []}) or {}
     snapshots = holders_store.get("snapshots") or []
     house = house_set()
     window_movers: dict[str, Any] = {}
     for w in WINDOW_DAYS:
         window_movers[f"movers_{w}d"] = _coldkey_movers_window(snapshots, w, house)
+
+    # Consolidated, net, brand-aggregated, churn-suppressed flow view.
+    flows = _flows_section(snapshots, house, movers)
+    # Owner economics — promoted to a first-class block the narrator leads with.
+    owner_economics = _owner_economics_section(emissions, owner, burn, tier, trends)
 
     # If subnet_log carries TAO USD via the daily log fallback, fold it in.
     if price.get("tao_price_usd") is None and daily_log:
@@ -754,7 +935,10 @@ def gather() -> dict[str, Any]:
     out = {
         "kind": "sn21_daily",
         "date": today_iso,
+        "owner_economics": owner_economics,
+        "market": market,
         "price": price,
+        "flows": flows,
         "pool": pool,
         "movers": movers,
         "owner_pool": owner,
@@ -762,9 +946,8 @@ def gather() -> dict[str, Any]:
         "emissions": emissions,
         "tier": tier,
         "trends": trends,
-        "market": market,
         "stale_fields": stale,
     }
     out.update(window_movers)  # movers_7d, movers_30d
-    out["flags"] = _flags(price, movers, owner, burn, market)
+    out["flags"] = _flags(price, flows, owner_economics, market)
     return out
