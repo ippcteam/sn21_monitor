@@ -640,8 +640,14 @@ def _coldkey_movers_window(snapshots: list[dict], window_days: int,
 
 # ── Consolidated net flows (brand-aggregated, churn-suppressed) ──────────────
 
-def _flow_group_key(brand: str | None, coldkey: str | None) -> str:
-    """Group rotation across a validator's coldkeys: brand if known, else coldkey."""
+def _flow_group_key(brand: str | None, name: str | None, coldkey: str | None) -> str:
+    """
+    Collapse a validator's coldkey rotation onto one row. Group by the operator's
+    display NAME (so two coldkeys both named e.g. "Tensorplex Labs" net out even
+    when the name isn't in KNOWN_BRANDS), then by known brand, then by coldkey.
+    """
+    if name and name.strip():
+        return f"name:{name.strip().lower()}"
     if brand:
         return f"brand:{brand}"
     return f"ck:{coldkey or ''}"
@@ -671,7 +677,7 @@ def _aggregate_flows(start_snap: dict, today_snap: dict,
         hotkeys = (t.get("hotkeys") or p.get("hotkeys") or [])
         brand = _label_brand(" ".join(names) if names else None)
         is_h = any(hk in house for hk in hotkeys) or (ck in house)
-        key = _flow_group_key(brand, ck)
+        key = _flow_group_key(brand, names[0] if names else None, ck)
 
         g = groups.setdefault(key, {
             "name": brand or (names[0] if names else f"{ck[:8]}…"),
