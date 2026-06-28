@@ -39,6 +39,12 @@ from market_sync import (
     latest as market_latest,
     run_sync as market_run,
 )
+from movers_attribution import (
+    backtest_latest as movers_backtest_latest,
+    capture_daily as movers_capture,
+    latest as movers_latest,
+    run_backtest as movers_run_backtest,
+)
 from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
 from weights_scan import (
@@ -46,6 +52,11 @@ from weights_scan import (
     our_validator_wallets,
     run_scan as weights_run,
     scan_history as weights_history,
+)
+from stake_watch import (
+    STAKE_WATCH_HISTORY,
+    STAKE_WATCH_STORE,
+    run_stake_watch,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -319,6 +330,28 @@ async def api_taostats_sync(_=Depends(require_auth)):
     except Exception as e:
         logger.exception("Taostats sync failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stake/watch")
+async def api_stake_watch(_=Depends(require_auth)):
+    """Last owner-share stake-watch snapshot (are the daily emission shares landing?)."""
+    return load_json(STAKE_WATCH_STORE, {})
+
+
+@app.post("/api/stake/watch")
+async def api_stake_watch_run(_=Depends(require_auth), notify: bool = False):
+    """Run the stake watch now. notify=1 also fires the Telegram alert on a stall."""
+    try:
+        return run_stake_watch(notify=notify)
+    except Exception as e:
+        logger.exception("Stake watch failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stake/history")
+async def api_stake_history(_=Depends(require_auth)):
+    """Stake-watch check history (status + staked-α over time)."""
+    return load_json(STAKE_WATCH_HISTORY, [])
 
 
 @app.get("/api/subnet-summary")
@@ -635,6 +668,46 @@ async def api_market_sync(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Movers Attribution (what drives 20%+ pumps: media vs mechanics vs dark) ────
+
+@app.get("/api/movers/summary")
+async def api_movers_summary(_=Depends(require_auth)):
+    """Latest forward-capture: today's classified movers + rolling lead-lag cohort table."""
+    payload = movers_latest()
+    if not payload:
+        return {"error": "No movers capture yet — POST /api/movers/capture"}
+    return payload
+
+
+@app.get("/api/movers/backtest")
+async def api_movers_backtest(_=Depends(require_auth)):
+    """Historical baseline study (winners/losers/control lead-lag from taoflute history)."""
+    payload = movers_backtest_latest()
+    if not payload:
+        return {"error": "No backtest yet — POST /api/movers/backtest"}
+    return payload
+
+
+@app.post("/api/movers/capture")
+async def api_movers_capture(_=Depends(require_auth)):
+    """Snapshot all subnets' media/mechanics recency, tag movers, refresh rolling table."""
+    try:
+        return movers_capture()
+    except Exception as e:
+        logger.exception("Movers capture failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/movers/backtest")
+async def api_movers_run_backtest(_=Depends(require_auth)):
+    """Recompute the historical baseline from taoflute history (a few read-only queries)."""
+    try:
+        return movers_run_backtest()
+    except Exception as e:
+        logger.exception("Movers backtest failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _backfill_thread_worker(start_iso: str, end_iso: str) -> None:
     global _backfill_running
     try:
@@ -922,6 +995,20 @@ def scheduled_lab_watch():
         logger.exception("Scheduled lab watch failed")
 
 
+def scheduled_stake_watch():
+    try:
+        run_stake_watch(notify=True)
+    except Exception:
+        logger.exception("Scheduled stake watch failed")
+
+
+def scheduled_movers_capture():
+    try:
+        movers_capture()
+    except Exception:
+        logger.exception("Scheduled movers capture failed")
+
+
 def log_tier_boundary(message: str) -> None:
     logger.info("SN21 entitlement tier boundary — %s", message)
 
@@ -1070,6 +1157,18 @@ scheduler.add_job(
     id="lab_watch",
     replace_existing=True,
 )
+scheduler.add_job(
+    scheduled_stake_watch,
+    CronTrigger(hour=7, minute=30),
+    id="daily_stake_watch",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_movers_capture,
+    CronTrigger(hour=9, minute=35),  # after market_sync (08:05) has written today's price ledger
+    id="daily_movers_capture",
+    replace_existing=True,
+)
 for _kind, _cfg in DIGESTS.items():
     if _cfg.cron_kwargs:
         _trigger = CronTrigger(**_cfg.cron_kwargs)
@@ -1109,7 +1208,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 
