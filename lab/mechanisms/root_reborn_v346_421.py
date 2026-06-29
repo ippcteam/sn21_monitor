@@ -45,7 +45,13 @@ def _score(sub: dict, state: dict) -> float:
     price = sub.get("ema_price") or sub.get("spot_price") or 0.0
     if price <= 0:
         return 0.0
-    b = state.get("sn21_miner_burn", 0.0) if sub["netuid"] == state.get("netuid", 21) else 0.0
+    # SN21's burn comes from state so scenarios can sweep it; every OTHER subnet
+    # uses its own live MinerBurned (confirmed live; 81/128 subnets burn), so the
+    # renormalised share is correct rather than assuming competitors burn nothing.
+    if sub["netuid"] == state.get("netuid", 21):
+        b = state.get("sn21_miner_burn", 0.0)
+    else:
+        b = sub.get("miner_burn", 0.0)
     return root_prop(sub, state) * price * (1.0 - b)
 
 

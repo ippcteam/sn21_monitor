@@ -12,13 +12,17 @@ S1..S5 results and returns: current standing, a risk register (the two risks to
 avoid), and a ranked list of concrete actions — each tagged with its expected
 effect on price and on owner alpha, the guardrail it respects, and a confidence.
 
-Honest framing on burn: lowering burn unambiguously helps PRICE (deeper pool via
-more emission injection) and lowers EMISSION-BLOCKING risk (you are paying real
-miners), and it raises total emission_share. The one thing it trades against is
-that burn routes the miner allocation to the owner key — so the precise owner-alpha
-optimum needs the routed-share accounting from the source (Action 1). Hence the
-burn action is "direction = reduce (high confidence on price + legibility),
-magnitude = directional pending source".
+Honest framing on burn (RESOLVED by Action 1 — subtensor coinbase source read):
+lowering burn helps PRICE (deeper pool via more emission injection), lowers
+EMISSION-BLOCKING risk, AND raises owner alpha. The old worry — that burn routes
+the miner allocation to the owner key — is FALSE: the coinbase BURNS withheld miner
+incentive (destroyed/recycled via burn_subnet_alpha; the owner receives nothing).
+The owner's only emission is the separate 18% SubnetOwnerCut, taken before the
+split and paid as staked alpha. Because the live `(1 - MinerBurned)` split shrinks
+SN21's renormalised NETWORK slice (reallocating it to other subnets), lower burn =
+bigger slice = bigger alpha emission = bigger 18% owner cut. So all three objectives
+point the same way — there is no owner-alpha trade-off. Only the magnitude is
+gate-directional (reproduction rel.err ~0.34; residual = exact root_proportion).
 """
 
 from __future__ import annotations
@@ -92,9 +96,11 @@ def _block_risk(b_now: float, scored: int | None) -> dict:
     return {
         "name": "Emission-blocking (fake-mining throttle)",
         "level": level,
-        "detail": (f"Current burn b={b_now:.2f} routes that share of miner pay to the owner key "
-                   f"instead of real miners — higher burn is the bad optic the triumvirate/Yuma "
-                   f"throttle targets.{miners} Lower burn directly reduces this risk."),
+        "detail": (f"Current burn b={b_now:.2f}: the chain BURNS that share of miner alpha "
+                   f"(destroyed/recycled — the owner does NOT receive it; its only emission is the "
+                   f"separate 18% owner cut) AND, via the renormalised (1-burn) split, hands SN21's "
+                   f"network emission slice to other subnets.{miners} Higher burn is the bad optic "
+                   f"the triumvirate/Yuma throttle targets; lower burn reverses both costs."),
     }
 
 
@@ -129,13 +135,16 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
             "action": (f"Reduce burn from b={b_now:.2f} toward 0 — next step to "
                        f"b≈{target_b:.2f}." if target_b is not None else
                        f"Reduce burn from b={b_now:.2f} toward 0."),
-            "effect_price": "↑ (more emission_share → deeper pool & staker yield)",
-            "effect_owner_alpha": (f"↑ up to +{owner_uplift*100:.0f}% at b=0 vs now"
-                                   if owner_uplift else "↑ (share ∝ (1−b))"),
+            "effect_price": "↑ (bigger network slice → more TAO injection → deeper pool & staker yield)",
+            "effect_owner_alpha": (f"↑ up to +{owner_uplift*100:.0f}% at b=0 vs now "
+                                   f"(bigger un-burned slice → bigger 18% owner cut)"
+                                   if owner_uplift else "↑ (18% owner cut scales with the (1−b) slice)"),
             "guardrail": (f"Emission-blocking risk ↓. Safe if miners dump ≤ "
                           f"~{safe_dump:.0%} of the freed alpha (S5)."),
-            "confidence": "HIGH on price & emission-blocking; magnitude on owner alpha "
-                          "DIRECTIONAL pending source (burn also routes miner pay to owner — Action 1).",
+            "confidence": "HIGH on price, owner alpha AND emission-blocking. Action 1 (source) "
+                          "CONFIRMS burn pays the owner nothing (it's destroyed) and the (1−b) split "
+                          "shrinks SN21's network slice — so all three goals align on reducing it. "
+                          "Magnitude is gate-directional (rel.err ~0.34; residual = exact root_proportion).",
         })
     else:
         actions.append({

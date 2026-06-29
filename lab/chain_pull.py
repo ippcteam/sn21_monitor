@@ -41,6 +41,7 @@ U64_MAX = 2 ** 64                       # TaoWeight normalisation
 U16_MAX = 65535                         # SubnetOwnerCut normalisation
 SUBNET_DAILY_STORE = DATA_DIR / "subnet_daily.json"  # Taostats incentive_burn lives here
 SUBNET_LATEST_PATH = "/api/subnet/latest/v1"          # live fallback for incentive_burn
+MINER_BURNED_SCALE = 2 ** 32     # MinerBurned fixed-point: bits / 2**32 -> fraction [0,1]
 
 
 def _f(x: Any) -> float | None:
@@ -112,6 +113,27 @@ def _current_miner_burn(default: float = 0.77) -> float:
     return b
 
 
+def _all_miner_burned(st) -> dict[int, float]:
+    """Per-subnet MinerBurned (the on-chain economic miner-emission burn) for ALL
+    subnets, in one query_map. Confirmed equal to Taostats `incentive_burn` for
+    SN21 (0.77 @ block 8.51M). The live Root Reborn split weights every subnet's
+    moving-price share by `root_proportion x (1 - MinerBurned)` and renormalises,
+    so the model needs EVERY subnet's burn — not just SN21's — or SN21's relative
+    share is biased low (81/128 subnets currently burn). Confirmed live on finney:
+    the `MinerBurned` storage map exists (new coinbase runtime)."""
+    out: dict[int, float] = {}
+    try:
+        for k, v in st.substrate.query_map("SubtensorModule", "MinerBurned"):
+            nu = int(getattr(k, "value", k))
+            raw = getattr(v, "value", v)
+            bits = raw.get("bits") if isinstance(raw, dict) else raw
+            if bits is not None:
+                out[nu] = min(1.0, max(0.0, float(bits) / MINER_BURNED_SCALE))
+    except Exception as e:  # noqa: BLE001 — never let burn lookup kill the pull
+        logger.warning("MinerBurned query_map failed (old runtime?): %s", e)
+    return out
+
+
 def _root_stake_tao(network: str = NETWORK) -> float | None:
     """Total root (netuid 0) stake in TAO = T_root, the numerator weight of
     root_prop. Summed from the netuid-0 metagraph, as root_reborn_model.py does.
@@ -159,6 +181,10 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
         logger.warning("SubnetOwnerCut query failed: %s", e)
         owner_cut = None
 
+    # Per-subnet economic burn (= Taostats incentive_burn), needed for the
+    # renormalised (1 - burn) split across ALL subnets, not just SN21.
+    miner_burned = _all_miner_burned(st)
+
     subnets = []
     for d in raw:
         nu = getattr(d, "netuid", None)
@@ -181,6 +207,7 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
             "spot_price": spot,              # tao_in / alpha_in
             "ema_price": moving,             # SubnetMovingPrice (the 'salary')
             "tempo": _int(getattr(d, "tempo", None)),
+            "miner_burn": miner_burned.get(nu, 0.0),   # on-chain MinerBurned (=incentive_burn)
             # chain's actual per-block emission — reproduction-gate ground truth
             "tao_in_emission": _f(getattr(d, "tao_in_emission", None)),
             "alpha_out_emission": _f(getattr(d, "alpha_out_emission", None)),
@@ -193,6 +220,12 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     if sn21 is None:
         raise RuntimeError(f"netuid {netuid} not present/priced in all_subnets()")
 
+    # Seed SN21's current burn from the chain (authoritative); fall back to the
+    # Taostats incentive_burn only if the chain map didn't return SN21.
+    sn21_b = miner_burned.get(netuid)
+    if sn21_b is None:
+        sn21_b = _current_miner_burn()
+
     return {
         "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
         "block": block,
@@ -201,7 +234,7 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
         "tao_weight": tao_weight,
         "owner_cut": owner_cut,
         "root_stake_tao": root_stake,
-        "sn21_miner_burn": _current_miner_burn(),
+        "sn21_miner_burn": sn21_b,
         "n_subnets": len(subnets),
         "subnets": subnets,
     }
