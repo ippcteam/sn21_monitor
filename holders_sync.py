@@ -225,6 +225,54 @@ def _diff_snapshots(today: dict[str, Any], prior: dict[str, Any] | None) -> list
     return out
 
 
+def _operator_key(row: dict[str, Any]) -> str:
+    """Collapse a holder's keys onto one operator row.
+
+    Group by the hotkey display NAME (so e.g. all of "Taostats"' hotkeys net out
+    onto one row), falling back to the coldkey when a position is unnamed. House
+    and external keys are kept in separate buckets so their subtotals stay clean.
+    """
+    name = (row.get("hotkey_name") or "").strip().lower()
+    prefix = "house:" if row.get("is_house") else "ext:"
+    return prefix + (f"name:{name}" if name else f"ck:{row.get('coldkey') or ''}")
+
+
+def _group_by_operator(diff: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate per-position movers into per-operator groups with subtotals."""
+    groups: dict[str, dict[str, Any]] = {}
+    for r in diff:
+        gkey = _operator_key(r)
+        g = groups.get(gkey)
+        if g is None:
+            name = (r.get("hotkey_name") or "").strip()
+            g = groups[gkey] = {
+                "operator": name or ((r.get("coldkey") or "")[:10] + "…"),
+                "is_house": bool(r.get("is_house")),
+                "key_count": 0,
+                "net_alpha": 0.0,
+                "net_alpha_as_tao": 0.0,
+                "inflow_alpha": 0.0,
+                "outflow_alpha": 0.0,
+                "members": [],
+            }
+        g["key_count"] += 1
+        g["net_alpha"] += r["alpha_delta"]
+        g["net_alpha_as_tao"] += r["alpha_as_tao_delta"]
+        if r["alpha_delta"] > 0:
+            g["inflow_alpha"] += r["alpha_delta"]
+        elif r["alpha_delta"] < 0:
+            g["outflow_alpha"] += -r["alpha_delta"]
+        g["members"].append(r)
+
+    out = list(groups.values())
+    for g in out:
+        g["members"].sort(key=lambda m: abs(m["alpha_delta"]), reverse=True)
+        for fld in ("net_alpha", "net_alpha_as_tao", "inflow_alpha", "outflow_alpha"):
+            g[fld] = round(g[fld], 6)
+    out.sort(key=lambda g: abs(g["net_alpha"]), reverse=True)
+    return out
+
+
 def get_movement(limit: int = 50) -> dict[str, Any]:
     """Top movers (by abs alpha delta) over the last 24h."""
     store = load_json(HOLDERS_STORE, {"snapshots": []})
@@ -249,6 +297,14 @@ def get_movement(limit: int = 50) -> dict[str, Any]:
     new_positions = sum(1 for r in diff if r["is_new"])
     exited_positions = sum(1 for r in diff if r["is_exited"])
 
+    # Per-operator groups (one row per player, accordion to individual keys).
+    # Group across the full diff so subtotals are exact, then cap each bucket
+    # to the top `limit` operators by absolute net move for display.
+    all_groups = _group_by_operator(diff)
+    cap = max(1, min(limit, 200))
+    house_groups = [g for g in all_groups if g["is_house"]]
+    other_groups = [g for g in all_groups if not g["is_house"]]
+
     return {
         "today_date": today.get("date"),
         "prior_date": (prior or {}).get("date"),
@@ -262,6 +318,16 @@ def get_movement(limit: int = 50) -> dict[str, Any]:
         "house_outflows_alpha": round(house_outflows_alpha, 6),
         "other_inflows_alpha": round(inflows_alpha - house_inflows_alpha, 6),
         "other_outflows_alpha": round(outflows_alpha - house_outflows_alpha, 6),
+        "house_net_alpha": round(house_inflows_alpha - house_outflows_alpha, 6),
+        "other_net_alpha": round(
+            (inflows_alpha - outflows_alpha) - (house_inflows_alpha - house_outflows_alpha), 6
+        ),
+        "house_operator_count": len(house_groups),
+        "other_operator_count": len(other_groups),
+        "house_key_count": sum(g["key_count"] for g in house_groups),
+        "other_key_count": sum(g["key_count"] for g in other_groups),
+        "house_groups": house_groups[:cap],
+        "other_groups": other_groups[:cap],
         "movers": movers,
     }
 
