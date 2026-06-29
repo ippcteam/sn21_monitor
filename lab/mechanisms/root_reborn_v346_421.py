@@ -6,13 +6,16 @@ Root Reborn mechanism (subtensor v3.4.6-421 / PR #2759) — the three switches.
 
 per the doc §1. A subnet's slice is this score normalised across all subnets.
 
-Unit choice for A (CONFIRM against source — G-9.1):
-  A_i is valued in TAO as `alpha_issued_i x ema_price_i` so it is unit-consistent
-  with R (TAO). Under this choice SN21's root_prop is ~0.99 today (young, little
-  alpha issued relative to root weight) — matching the doc's "youth allowance near
-  its peak now". A raw-alpha convention (A = alpha_issued) gives a much lower
-  root_prop; which the chain actually uses is the Action-1 source question. The
-  convention is a module constant so it can be flipped when the source is read.
+Exact root_proportion (Action 1, subtensor block_step.rs:69 `root_proportion`):
+  root_prop_i = (root_tao x tao_weight) / (root_tao x tao_weight + alpha_issuance_i)
+  - root_tao      = SubnetTAO[0] (TAO in the ROOT pool; GLOBAL, same for all subnets)
+  - tao_weight    = TaoWeight / 2**64 (live ~0.18)
+  - alpha_issuance_i = SubnetAlphaIn_i + SubnetAlphaOut_i  (RAW alpha, NO price)
+  The earlier `A = alpha_issued x ema_price` (TAO-valued) convention was WRONG —
+  there is no price multiply, and the denominator uses AlphaIn+AlphaOut, not just
+  alpha_out. Today alpha_issuance is ~uniform (~5.3M) across subnets, so root_prop
+  is ~flat (~0.15) and barely affects relative shares — it matters as subnets'
+  issuance diverges with age.
 
 miner_burn:
   Only SN21's b is known (from the weight scan, state['sn21_miner_burn']). Other
@@ -27,16 +30,16 @@ from . import Mechanism, register
 PR_URL = "https://github.com/opentensor/subtensor/pull/2759"
 ACTIVATION_BLOCK = None  # confirm via Action 0
 
-# A-unit convention: True => A valued in TAO (alpha_issued x price); False => raw alpha.
-VALUE_A_IN_TAO = True
-
-
 def root_prop(sub: dict, state: dict) -> float:
-    """R / (R + A) for one subnet."""
-    R = (state.get("root_stake_tao") or 0.0) * (state.get("tao_weight") or 0.0)
-    a = sub.get("alpha_issued") or 0.0
-    if VALUE_A_IN_TAO:
-        a = a * (sub.get("ema_price") or sub.get("spot_price") or 0.0)
+    """Exact root_proportion(netuid): (root_tao x tao_weight) / (that + alpha_issuance).
+    root_tao = SubnetTAO[0] (global); alpha_issuance = SubnetAlphaIn + SubnetAlphaOut
+    (raw alpha, no price). Falls back to the legacy root_stake_tao only if root_tao
+    is absent (e.g. an old snapshot)."""
+    root_tao = state.get("root_tao")
+    if root_tao is None:
+        root_tao = state.get("root_stake_tao") or 0.0   # legacy fallback
+    R = root_tao * (state.get("tao_weight") or 0.0)
+    a = (sub.get("alpha_in") or 0.0) + (sub.get("alpha_issued") or 0.0)   # AlphaIn + AlphaOut
     denom = R + a
     return (R / denom) if denom > 0 else 0.0
 

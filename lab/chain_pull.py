@@ -149,7 +149,7 @@ def _root_stake_tao(network: str = NETWORK) -> float | None:
 
 
 def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
-                     include_root_stake: bool = True) -> dict:
+                     include_root_stake: bool = False) -> dict:
     """Pull a complete, self-describing ChainState snapshot.
 
     Returns a dict (JSON-safe) with global params + a per-subnet list. Snapshotted
@@ -180,6 +180,17 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     except Exception as e:  # noqa: BLE001
         logger.warning("TaoWeight query failed: %s", e)
         tao_weight = None
+
+    # Root TAO = SubnetTAO[0], the TAO reserve in the root pool. This is the exact
+    # `root_tao` in subtensor's root_proportion(netuid) (block_step.rs) — a GLOBAL
+    # scalar, same for every subnet. Replaces the old metagraph-stake-sum proxy
+    # (and the ~10-20s netuid-0 sync it needed). Source-confirmed by Action 1.
+    try:
+        rt_raw = st.substrate.query("SubtensorModule", "SubnetTAO", [0]).value
+        root_tao = float(rt_raw) / 1e9
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SubnetTAO[0] query failed: %s", e)
+        root_tao = None
 
     # Global owner cut (u16 normalised) — the 18% slice.
     try:
@@ -248,7 +259,8 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
         "netuid": netuid,
         "tao_weight": tao_weight,
         "owner_cut": owner_cut,
-        "root_stake_tao": root_stake,
+        "root_tao": root_tao,              # SubnetTAO[0] — exact root_proportion input
+        "root_stake_tao": root_stake,      # legacy metagraph sum (only if include_root_stake)
         "sn21_miner_burn": sn21_b,
         "n_subnets": len(subnets),
         "subnets": subnets,
