@@ -565,6 +565,7 @@
     <button class="tab-btn" data-tab="validators">Validators</button>
     <button class="tab-btn" data-tab="movement">Movement</button>
     <button class="tab-btn" data-tab="market">Market</button>
+    <button class="tab-btn" data-tab="social">Social</button>
     <button class="tab-btn" data-tab="lab">Lab</button>
   </nav>
   <div class="topbar-right">
@@ -814,6 +815,42 @@
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
   </section><!-- /market -->
+
+  <!-- ───────────── SOCIAL TAB ───────────── -->
+  <section class="tab-panel" data-panel="social">
+    <div class="section-label">
+      Our X Account · own-post performance <span id="ownPostsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+    </div>
+    <div class="table-card" id="ownPostsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">
+      X / Social Signal · forward-capture as it backfills
+      <span id="socialMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerSocialCapture()" title="Snapshot every subnet's X/discord recency, tag today's movers, refresh the rolling lead-lag table (~10s)">Capture now (~10s)</button>
+    </div>
+    <div id="socialBanner" class="alert-banner" style="margin-top:0.75rem"></div>
+    <div class="cards-grid" id="socialCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Does the signal <em>lead</em> pumps? · rolling lead-lag by cohort (signal was fresh the day <strong>before</strong> the move)</div>
+    <div class="table-card" id="socialSignalsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Today's movers · ±20% with signal mix <span id="socialMoversMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="table-card" id="socialMoversTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Historical baseline · why X needs forward capture (mechanics &amp; discord are backtestable; X is not)</div>
+    <div id="socialBacktestBanner" class="alert-banner" style="margin-top:0.5rem"></div>
+    <div class="table-card" id="socialBacktestTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </section><!-- /social -->
 
   <section class="tab-panel" data-panel="lab">
     <div class="section-label">
@@ -1830,14 +1867,242 @@ async function triggerMarketScan() {
   } catch (e) { alert(e); }
 }
 
+/* ── Social (X / forward-capture) tab ─────────────────────────── */
+const SOCIAL_SIGNALS = [
+  { key: 'x_lead',    label: 'X / Twitter',  sub: 'fresh ≤{fresh}d', lead: true },
+  { key: 'disc_lead', label: 'Discord',      sub: 'fresh ≤{fresh}d' },
+  { key: 'code_lead', label: 'Code commits', sub: '30d active' },
+  { key: 'buy_lead',  label: 'Buy pressure', sub: '> 0' },
+];
+
+function socialVerdict(d) {
+  const rc = d.rolling_cohorts || {};
+  const w = (rc.counts || {}).winner || 0;
+  const x = (rc.signals || {}).x_lead;
+  if (!x || !w) return { cls: '', pill: 'ACCRUING', live: true,
+    text: rc.note || "Forward capture is accruing the X signal that can't be backtested — visibility only until a read appears." };
+  if (w < 30) return { cls: '', pill: 'EARLY · NOISY',
+    text: `Only ${w} winner-day${w === 1 ? '' : 's'} captured — X lift stays noisy until ~30+.`
+      + (x.lift_vs_control != null ? ` Running X lift vs control ${x.lift_vs_control}×.` : '') };
+  if (x.directional) return { cls: 'alert-surge', pill: 'X LEADS · DIRECTIONAL',
+    text: `X freshness leads winners ${x.winner_pct}% vs control ${x.control_pct}% / losers ${x.loser_pct}% — directional driver so far.` };
+  return { cls: '', pill: 'NOT DIRECTIONAL',
+    text: `X freshness ${x.winner_pct}% winners vs ${x.control_pct}% control / ${x.loser_pct}% losers — attention marker, not direction yet.` };
+}
+
+function pctCell(v) {
+  if (v == null) return '<span style="color:var(--muted)">—</span>';
+  return `${fmtPct(v, 1)}%`;
+}
+
+function socialDaysCell(days, fresh) {
+  if (days == null || days >= 999) return '<span style="color:var(--muted)">—</span>';
+  const c = fresh ? 'var(--green)' : 'var(--muted)';
+  return `<span style="color:${c}">${days}d${fresh ? ' · fresh' : ''}</span>`;
+}
+
+async function loadOwnPosts() {
+  const el = document.getElementById('ownPostsTable');
+  const meta = document.getElementById('ownPostsMeta');
+  try {
+    const r = await fetch('/api/social/posts');
+    const d = await r.json();
+    if (d.error) {
+      el.innerHTML = `<div class="no-data"><strong>X Listen unreachable</strong><span>${d.error}</span></div>`;
+      return;
+    }
+    const posts = d.posts || [];
+    const accts = (d.accounts || []).map(a =>
+      '@' + a.handle + (a.followers_count != null ? ' (' + fmtInt(a.followers_count) + ' followers)' : '')).join(' · ');
+    meta.textContent = (accts ? ' · ' + accts : '')
+      + (d.fetched_at_utc ? ' · ' + d.fetched_at_utc.replace('T', ' ').slice(0, 16) + ' UTC' : '');
+    if (!posts.length) {
+      el.innerHTML = `<div class="no-data"><strong>No tracked posts yet</strong>
+        <span>X Listen samples our posts every 15 min — they'll appear here as they're captured.</span></div>`;
+      return;
+    }
+    const rows = posts.map(p => {
+      const txt = (p.text || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+      const when = (p.published_at || '').replace('T', ' ').slice(0, 16);
+      const cell = p.post_url
+        ? `<a href="${p.post_url}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none">${txt}…</a>`
+        : txt;
+      return `<tr>
+        <td style="color:var(--muted);white-space:nowrap">@${p.handle || '—'}</td>
+        <td>${cell}</td>
+        <td class="mono" style="white-space:nowrap;color:var(--muted)">${when}</td>
+        <td class="mono">${fmtInt(p.latest_view_count)}</td>
+        <td class="mono">${fmtInt(p.latest_like_count)}</td>
+        <td class="mono">${fmtInt(p.latest_reply_count)}</td>
+        <td class="mono">${fmtInt(p.latest_repost_count)}</td>
+        <td class="mono">${fmtInt(p.latest_quote_count)}</td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Account</th><th>Post</th><th>Published</th><th>Views</th><th>Likes</th><th>Replies</th><th>Reposts</th><th>Quotes</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } catch (e) {
+    console.error('own posts', e);
+    el.innerHTML = `<div class="no-data"><strong>Failed to load own posts</strong><span>${e}</span></div>`;
+  }
+}
+
+async function loadSocialTab() {
+  loadOwnPosts();  // independent of the subnet-freshness signal; load in parallel
+  const cardsEl = document.getElementById('socialCards');
+  const banner  = document.getElementById('socialBanner');
+  try {
+    const r = await fetch('/api/movers/summary');
+    const d = await r.json();
+    if (d.error) {
+      banner.className = 'alert-banner';
+      cardsEl.innerHTML = '';
+      document.getElementById('socialSignalsTable').innerHTML =
+        `<div class="no-data"><strong>${d.error}</strong>
+         <span>Snapshot every subnet's X/discord recency and tag today's movers (~10s).
+         <button class="btn-sm" onclick="triggerSocialCapture()">Capture now</button></span></div>`;
+      document.getElementById('socialMoversTable').innerHTML = '';
+      await loadSocialBacktest();
+      return;
+    }
+
+    const fresh = (d.params || {}).fresh_days != null ? d.params.fresh_days : 2;
+    document.getElementById('socialMeta').textContent =
+      ' · ' + (d.date || '') + ' · ' + (d.n_days_captured || 0) + 'd captured · '
+      + (d.fetched_at_utc || '').replace('T', ' ').slice(0, 16) + ' UTC'
+      + (d.taoflute_ok === false ? ' · taoflute offline (price-only)' : '');
+
+    const v = socialVerdict(d);
+    banner.className = 'alert-banner ' + (v.cls ? v.cls + ' show' : 'show');
+    banner.innerHTML = `<span class="burn-pill${v.live ? ' live' : ''}">${v.pill}</span><span>${v.text}</span>`;
+
+    const rc = d.rolling_cohorts || {};
+    const counts = rc.counts || {};
+    const x = (rc.signals || {}).x_lead || {};
+    const cards = [
+      { label: 'Days captured', value: d.n_days_captured || 0, unit: 'of ~30 for a read', accent: '#2563EB' },
+      { label: 'Winner-days', value: counts.winner != null ? counts.winner : 0, unit: '±20% pumps in window', accent: '#10B981' },
+      { label: 'X-lead lift vs control', value: x.lift_vs_control != null ? x.lift_vs_control + '×' : '—', unit: 'winner% / control%', accent: '#8B5CF6' },
+      { label: 'X directional?', value: x.directional == null ? '—' : (x.directional ? 'Yes' : 'No'), unit: 'leads winners ≫ control & losers', accent: '#F59E0B' },
+    ];
+    cardsEl.innerHTML = cards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+      </div>`).join('');
+
+    const sig = rc.signals || {};
+    if (!Object.keys(sig).length) {
+      document.getElementById('socialSignalsTable').innerHTML =
+        `<div class="no-data"><strong>${rc.note || 'No rolling lift yet'}</strong>
+         <span>Need ≥2 captured days; the table fills in as snapshots accrue.</span></div>`;
+    } else {
+      const rows = SOCIAL_SIGNALS.map(s => {
+        const a = sig[s.key];
+        if (!a) return '';
+        const dir = a.directional == null
+          ? '<span style="color:var(--muted)">—</span>'
+          : (a.directional ? '<span style="color:var(--green)">✓ directional</span>' : '<span style="color:var(--muted)">✗ no</span>');
+        return `<tr${s.lead ? ' style="background:rgba(139,92,246,0.06)"' : ''}>
+          <td>${s.label}${s.lead ? ' <span class="house-chip">X</span>' : ''}<br><span style="color:var(--muted);font-size:0.66rem">${s.sub.replace('{fresh}', fresh)}</span></td>
+          <td class="mono">${pctCell(a.winner_pct)}</td>
+          <td class="mono">${pctCell(a.control_pct)}</td>
+          <td class="mono">${pctCell(a.loser_pct)}</td>
+          <td class="mono">${a.lift_vs_control != null ? a.lift_vs_control + '×' : '—'}</td>
+          <td>${dir}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('socialSignalsTable').innerHTML =
+        `<div class="table-wrap"><table>
+          <thead><tr><th>Signal (fresh the prior day)</th><th>Winners</th><th>Control</th><th>Losers</th><th>Lift</th><th>Directional?</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>`;
+    }
+
+    const movers = d.today_movers || [];
+    document.getElementById('socialMoversMeta').textContent = movers.length ? ` · ${movers.length} today` : '';
+    if (!movers.length) {
+      document.getElementById('socialMoversTable').innerHTML =
+        `<div class="no-data"><strong>No ±20% movers today</strong>
+         <span>Snapshots still accrue for every subnet — movers appear here on big-move days.</span></div>`;
+    } else {
+      const rows = movers.map(m => `
+        <tr${m.netuid === 21 ? ' style="background:rgba(245,158,11,0.06)"' : ''}>
+          <td class="uid">${m.netuid}</td>
+          <td>${m.name || '<span style="color:var(--muted)">—</span>'}${m.netuid === 21 ? ' <span class="house-chip">SN21</span>' : ''}</td>
+          <td class="mono">${moveCell(m.move_24h_pct)}</td>
+          <td>${m.cohort === 'winner' ? '<span style="color:var(--green)">▲ winner</span>' : '<span style="color:var(--red)">▼ loser</span>'}</td>
+          <td class="mono">${socialDaysCell(m.x_days, m.x_fresh)}</td>
+          <td class="mono">${socialDaysCell(m.disc_days, m.discord_fresh)}</td>
+          <td>${m.code_active ? '<span style="color:var(--green)">●</span>' : '<span style="color:var(--muted)">—</span>'}</td>
+          <td style="color:var(--muted)">${m.read || ''}</td>
+        </tr>`).join('');
+      document.getElementById('socialMoversTable').innerHTML =
+        `<div class="table-wrap"><table>
+          <thead><tr><th>Netuid</th><th>Subnet</th><th>24h</th><th>Cohort</th><th>X</th><th>Discord</th><th>Code</th><th>Read</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>`;
+    }
+
+    await loadSocialBacktest();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('socialSignalsTable').innerHTML =
+      `<div class="no-data"><strong>Failed to load social signal</strong><span>${e}</span></div>`;
+  }
+}
+
+async function loadSocialBacktest() {
+  const banner = document.getElementById('socialBacktestBanner');
+  const tableEl = document.getElementById('socialBacktestTable');
+  try {
+    const r = await fetch('/api/movers/backtest');
+    const d = await r.json();
+    if (d.error) {
+      banner.className = 'alert-banner';
+      tableEl.innerHTML = `<div class="no-data"><strong>${d.error}</strong>
+        <span>Recompute the historical baseline from taoflute history.</span></div>`;
+      return;
+    }
+    const c = d.counts || {};
+    banner.className = 'alert-banner show';
+    banner.innerHTML = `<span class="burn-pill">BASELINE</span><span>${d.verdict || ''}
+      <br><span style="color:var(--muted)">Window from ${d.window_start} · ${c.winner || 0} winners / ${c.control || 0} control / ${c.loser || 0} losers.</span></span>`;
+
+    const ds = d.discord_spike_pct || {};
+    const drow = (lbl, o) => `<tr>
+      <td>${lbl}</td>
+      <td class="mono">${pctCell(o && o.lead)}</td>
+      <td class="mono">${pctCell(o && o.day)}</td>
+      <td class="mono">${pctCell(o && o.lag)}</td>
+      <td class="mono" style="color:var(--muted)">${o ? o.n : '—'}</td>
+    </tr>`;
+    tableEl.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Discord spike (backtest)</th><th>Lead (d-2,-1)</th><th>Day</th><th>Lag (d+1,+2)</th><th>n</th></tr></thead>
+        <tbody>${drow('Winners ▲', ds.winner)}${drow('Control', ds.control)}${drow('Losers ▼', ds.loser)}</tbody></table></div>`
+      + `<div style="padding:0.5rem 0.75rem;color:var(--muted);font-size:0.7rem">Losers light up ≥ winners → discord is an attention marker, not a directional driver. X has no tweet-timestamp history, so only forward capture (above) can test it.</div>`;
+  } catch (e) {
+    console.error('social backtest', e);
+    tableEl.innerHTML = `<div class="no-data"><strong>Failed to load baseline</strong><span>${e}</span></div>`;
+  }
+}
+
+async function triggerSocialCapture() {
+  try {
+    const r = await fetch('/api/movers/capture', { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) { alert('Capture failed (' + r.status + ')'); return; }
+    await loadSocialTab();
+  } catch (e) { alert(e); }
+}
+
 /* ── Tab switching ─────────────────────────────────────────────── */
-const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false, market: false, lab: false };
+const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false, market: false, social: false, lab: false };
 const _tabLoaders = {
   activity:   () => loadActivityTab(),
   neurons:    () => loadNeuronsTab(),
   validators: () => loadValidatorsTab(),
   movement:   () => loadMovementTab(),
   market:     () => loadMarketTab(),
+  social:     () => loadSocialTab(),
   lab:        () => loadLabTab(),
 };
 
@@ -2710,7 +2975,7 @@ document.querySelectorAll('[data-house-filter]').forEach(b => {
 });
 
 const initialTab = (location.hash || '').replace('#', '');
-if (initialTab && ['home','activity','neurons','validators','movement','market'].includes(initialTab)) {
+if (initialTab && ['home','activity','neurons','validators','movement','market','social','lab'].includes(initialTab)) {
   activateTab(initialTab);
 }
 
