@@ -27,6 +27,7 @@ Reuses the finney SSL fix + NETWORK from collector.py, like market_sync.py.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,7 +39,8 @@ logger = logging.getLogger(__name__)
 NETUID_SN21 = 21
 U64_MAX = 2 ** 64                       # TaoWeight normalisation
 U16_MAX = 65535                         # SubnetOwnerCut normalisation
-WEIGHTS_STORE = DATA_DIR / "weights_scan.json"   # source of the live miner_burn b
+SUBNET_DAILY_STORE = DATA_DIR / "subnet_daily.json"  # Taostats incentive_burn lives here
+SUBNET_LATEST_PATH = "/api/subnet/latest/v1"          # live fallback for incentive_burn
 
 
 def _f(x: Any) -> float | None:
@@ -56,21 +58,58 @@ def _f(x: Any) -> float | None:
     return None
 
 
-def _current_miner_burn(default: float = 0.75) -> float:
-    """SN21's live miner_burn b, read from the latest weight scan if present.
+def _burn_from_subnet_daily() -> float | None:
+    """Latest persisted Taostats `incentive_burn` (subnet_sync writes it daily —
+    the same source the daily digest reports)."""
+    log = load_json(SUBNET_DAILY_STORE, [])
+    if isinstance(log, list) and log:
+        ib = (log[-1].get("subnet") or {}).get("incentive_burn")
+        try:
+            return float(ib) if ib is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
 
-    weights_scan.json records burn.burn_fraction (share of validators routing
-    ~100% to the owner UID). Falls back to `default` (our known 0.75 setting)
-    when no scan has run yet. Scenarios that sweep b ignore this; it only seeds
-    the 'current' point."""
-    payload = load_json(WEIGHTS_STORE, {})
+
+def _burn_from_taostats() -> float | None:
+    """Live `incentive_burn` from Taostats — the economic miner-emission burn."""
+    key = (os.environ.get("TAOSTATS_API_KEY") or "").strip()
+    if not key:
+        return None
+    base = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
     try:
-        b = payload.get("burn", {}).get("burn_fraction")
-        if b is not None:
-            return float(b)
-    except (AttributeError, TypeError, ValueError):
-        pass
-    return default
+        import requests
+        r = requests.get(base + SUBNET_LATEST_PATH, params={"netuid": NETUID_SN21},
+                         headers={"Authorization": key, "Accept": "application/json"},
+                         timeout=30)
+        r.raise_for_status()
+        row = (r.json().get("data") or [{}])[0]
+        ib = row.get("incentive_burn")
+        return float(ib) if ib is not None else None
+    except Exception as e:  # noqa: BLE001 — never let burn lookup kill the pull
+        logger.warning("Lab: live incentive_burn fetch failed: %s", e)
+        return None
+
+
+def _current_miner_burn(default: float = 0.77) -> float:
+    """SN21's live miner_burn b for the (1 - b) emission gate.
+
+    This MUST be the *economic* burn — the fraction of miner (incentive) emission
+    that is burned/recycled rather than paid out — read from Taostats
+    `incentive_burn`. Do NOT use the weight-scan `burn_fraction`: that is the
+    fraction of *validators* routing weight to the owner UID (a headcount gated at
+    a 0.98 threshold), which reads ~1.0 even when the economic burn is ~0.77.
+    Conflating the two zeroed the modelled emission share (1-b=0) and broke the
+    reproduction gate. Source order: persisted subnet_daily.json -> live Taostats
+    -> default (last-known ~0.77). Scenarios that sweep b ignore this; it only
+    seeds the 'current' point."""
+    b = _burn_from_subnet_daily()
+    if b is None:
+        b = _burn_from_taostats()
+    if b is None:
+        logger.warning("Lab: no incentive_burn available; defaulting b=%.2f", default)
+        return default
+    return b
 
 
 def _root_stake_tao(network: str = NETWORK) -> float | None:
