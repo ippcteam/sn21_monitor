@@ -40,6 +40,38 @@ def actual_sn21_share(state: dict) -> float | None:
     return (me.get("tao_in_emission") or 0.0) / tot
 
 
+def sn21_effective_burn(state: dict, mech) -> dict:
+    """SN21's EFFECTIVE burn — the b that makes the (1-b) model reproduce SN21's
+    actual TAO-injection share, holding every other subnet at its snapshot burn.
+
+    Investigation finding (not a smoothing lag — MinerBurned has been stable/declining
+    for days): SN21 receives ~3x more TAO injection than its nominal MinerBurned
+    implies, so it emits as if its burn were far lower. This effective burn is the
+    price-relevant number: it is the real throttle on SN21's pool TAO injection, and
+    tracking it over runs is how the snapshot->emission transfer function is derived
+    empirically. Solve: actual = S(1-b)/(S(1-b)+Rest), S = price*root_prop_SN21,
+    Rest = sum of every other subnet's score -> b_eff = 1 - actual*Rest/(S*(1-actual))."""
+    me = sn21(state)
+    actual = actual_sn21_share(state)
+    S = max(0.0, mech.score(me, state) / (1.0 - (state.get("sn21_miner_burn") or 0.0)) ) \
+        if (state.get("sn21_miner_burn") or 0.0) < 1.0 else None
+    if actual is None or not S or S <= 0 or actual >= 1.0:
+        return {"nominal_burn": state.get("sn21_miner_burn"), "effective_burn": None}
+    rest = sum(max(0.0, mech.score(s, state)) for s in state["subnets"]
+               if s["netuid"] != state.get("netuid", 21))
+    one_minus_b = actual * rest / (S * (1.0 - actual))
+    b_eff = max(0.0, min(1.0, 1.0 - one_minus_b))
+    nominal = state.get("sn21_miner_burn") or 0.0
+    return {
+        "nominal_burn": round(nominal, 4),
+        "effective_burn": round(b_eff, 4),
+        "gap": round(nominal - b_eff, 4),
+        "note": ("SN21's pool TAO injection is throttled as if burn were "
+                 f"{b_eff:.2f}, not its nominal {nominal:.2f} — it over-emits for its "
+                 "burn. Track this gap over runs to derive the real transfer function."),
+    }
+
+
 def _network_reproduction(state: dict, mech, tolerance: float):
     """Per-subnet model-vs-actual rel.err across all EMITTING subnets. This tests
     the FORMULA STRUCTURE network-wide, independent of any single subnet's burn
@@ -131,6 +163,7 @@ def run_lab(version: str = DEFAULT_VERSION, live: bool = True,
         state = pull_chain_state()
 
     gate = reproduction_gate(state, tolerance)
+    eff_burn = sn21_effective_burn(state, mech)
     scen = SC.run_all(state)
 
     from .recommend import build_recommendations
@@ -145,6 +178,7 @@ def run_lab(version: str = DEFAULT_VERSION, live: bool = True,
         "tolerance": tolerance,
         "trusted": gate["passed"],
         "reproduction": gate,
+        "effective_burn": eff_burn,
         "chain_state": _compact_state(state, version),
         "scenarios": scen,
         "recommendations": recs,
@@ -180,6 +214,10 @@ def main(argv=None):
           f"(rel.err {g['relative_error']}, {'within' if g['sn21_passed'] else 'OUTSIDE'} tol)")
     print(f"  {g['note']}")
     print(f"  trusted = {rec['trusted']}")
+    eb = rec.get("effective_burn") or {}
+    if eb.get("effective_burn") is not None:
+        print(f"  SN21 burn: nominal {eb['nominal_burn']} -> EFFECTIVE {eb['effective_burn']} "
+              f"(gap {eb['gap']}) — the real throttle on pool TAO injection.")
     for key in ("S1", "S2", "S3", "S4", "S5"):
         sc = rec["scenarios"].get(key, {})
         summ = sc.get("summary") or sc.get("error") or "—"
