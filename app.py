@@ -739,9 +739,14 @@ def _lab_run_worker(version: str) -> None:
 
 @app.get("/api/lab/mechanisms")
 async def api_lab_mechanisms(_=Depends(require_auth)):
-    """Registered emission mechanisms (incumbent + proposed)."""
+    """Registered emission mechanisms (with deploy stage + stance) plus the
+    proposed-PR watchlist — i.e. the full Consider→Plan→Go change pipeline."""
     from lab import store as lab_store
-    return {"mechanisms": lab_store.registry_meta()}
+    from lab.watcher import proposed_changes
+    return {
+        "mechanisms": lab_store.registry_meta(),
+        "proposed": proposed_changes(),
+    }
 
 
 @app.get("/api/lab/runs")
