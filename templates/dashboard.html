@@ -819,6 +819,19 @@
   <!-- ───────────── SOCIAL TAB ───────────── -->
   <section class="tab-panel" data-panel="social">
     <div class="section-label">
+      Our Demand Base · holders vs buy pressure <span id="demandMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+    </div>
+    <div class="cards-grid" id="demandCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+    <div class="charts-grid">
+      <div class="chart-card full">
+        <div class="chart-header"><span class="chart-title">Holder count vs protocol buy pressure · accruing daily (broadening holders + negative buy pressure = off-protocol, attention-driven demand)</span></div>
+        <div class="chart-canvas-wrap"><canvas id="chartDemand"></canvas></div>
+      </div>
+    </div>
+
+    <div class="section-label">
       Our X Account · own-post performance <span id="ownPostsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
     </div>
     <div class="table-card" id="ownPostsTable">
@@ -1901,6 +1914,65 @@ function socialDaysCell(days, fresh) {
   return `<span style="color:${c}">${days}d${fresh ? ' · fresh' : ''}</span>`;
 }
 
+async function loadDemand() {
+  const cardsEl = document.getElementById('demandCards');
+  const meta = document.getElementById('demandMeta');
+  try {
+    const r = await fetch('/api/social/demand');
+    const d = await r.json();
+    const c = d.current || {};
+    meta.textContent = (c.as_of ? ' · as of ' + c.as_of : '') + ' · ' + (d.n_days || 0) + 'd accruing';
+
+    const bp = c.buy_pressure;
+    const hcDelta = c.holder_count_pct_7d;
+    const cards = [
+      { label: 'Holder count', value: c.holder_count != null ? fmtInt(c.holder_count) : '—',
+        unit: hcDelta != null ? (hcDelta > 0 ? '+' : '') + hcDelta + '% · 7d' : 'broadening = demand', accent: '#10B981' },
+      { label: 'Protocol buy pressure', value: bp != null ? (bp > 0 ? '+' : '') + fmtPct(bp, 1) : '—',
+        unit: bp != null && bp < 0 ? 'negative · off-protocol demand' : 'protocol side', accent: '#2563EB' },
+      { label: 'Alpha price (τ)', value: c.price != null ? fmt(c.price, 6) : '—', unit: 'alpha/TAO', accent: '#F59E0B' },
+    ];
+    cardsEl.innerHTML = cards.map(x => `
+      <div class="card">
+        <div class="card-accent" style="background:${x.accent}"></div>
+        <div class="card-label">${x.label}</div>
+        <div class="card-value">${x.value}<span class="card-unit">${x.unit}</span></div>
+      </div>`).join('');
+
+    const series = d.series || [];
+    const labels = series.map(s => s.date);
+    const holders = series.map(s => s.holder_count);
+    const buyp = series.map(s => s.buy_pressure);
+    const ctx = document.getElementById('chartDemand').getContext('2d');
+    if (charts['chartDemand']) charts['chartDemand'].destroy();
+    charts['chartDemand'] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Holder count', data: holders, yAxisID: 'y', borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.08)', borderWidth: 2, tension: 0.3, pointRadius: 0, fill: true, spanGaps: true },
+          { label: 'Buy pressure', data: buyp, yAxisID: 'y1', borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,0.06)', borderWidth: 2, tension: 0.3, pointRadius: 0, fill: false, spanGaps: true },
+        ],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        plugins: {
+          ...CHART_DEFAULTS.plugins,
+          legend: { display: true, labels: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 }, boxWidth: 12, padding: 10 } },
+        },
+        scales: {
+          x: { ...CHART_DEFAULTS.scales.x },
+          y: { ...CHART_DEFAULTS.scales.y, position: 'left', title: { display: true, text: 'Holders', color: '#10B981', font: { size: 9 } } },
+          y1: { grid: { drawOnChartArea: false }, position: 'right', ticks: { color: '#475569', font: { family: "'JetBrains Mono', monospace", size: 10 }, maxTicksLimit: 6 }, title: { display: true, text: 'Buy pressure', color: '#2563EB', font: { size: 9 } } },
+        },
+      },
+    });
+  } catch (e) {
+    console.error('demand', e);
+    cardsEl.innerHTML = `<div class="no-data"><strong>Failed to load demand signal</strong><span>${e}</span></div>`;
+  }
+}
+
 async function loadOwnPosts() {
   const el = document.getElementById('ownPostsTable');
   const meta = document.getElementById('ownPostsMeta');
@@ -1948,6 +2020,7 @@ async function loadOwnPosts() {
 }
 
 async function loadSocialTab() {
+  loadDemand();    // SN21 holder base + buy pressure overlay; independent
   loadOwnPosts();  // independent of the subnet-freshness signal; load in parallel
   const cardsEl = document.getElementById('socialCards');
   const banner  = document.getElementById('socialBanner');
