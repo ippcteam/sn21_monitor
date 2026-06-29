@@ -159,6 +159,14 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     import bittensor as bt
 
     st = bt.Subtensor(network=network, log_verbose=False)
+    # NB: bittensor 9.12.2 logs a benign "Storage function 'Swap.AlphaSqrtPrice'
+    # not found" warning here — the live runtime renamed the Swap pallet's pricing
+    # storage (now SwapBalancer/ScrapReservoirAlpha). That only breaks the SDK's
+    # auxiliary bulk-price helper; DynamicInfo.price (spot) and .moving_price (EMA)
+    # still decode correctly, and we recompute spot as tao_in/alpha_in regardless.
+    # Verified: all 128 subnets priced despite the warning. The SDK lags the
+    # runtime, so a planned bittensor upgrade is worthwhile, but it is not a
+    # data-correctness fix — the price guard below fails loud if that ever changes.
     raw = st.all_subnets() or []
     try:
         block = int(st.get_current_block())
@@ -218,7 +226,14 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
 
     sn21 = next((s for s in subnets if s["netuid"] == netuid), None)
     if sn21 is None:
-        raise RuntimeError(f"netuid {netuid} not present/priced in all_subnets()")
+        raise RuntimeError(f"netuid {netuid} not present in all_subnets()")
+    # Fail loud rather than silently model a zero-price slice — guards against a
+    # future runtime/SDK skew actually breaking the price decode (see all_subnets
+    # note above; the AlphaSqrtPrice warning is benign only while these stay set).
+    if not (sn21.get("spot_price") or sn21.get("ema_price")):
+        raise RuntimeError(
+            f"netuid {netuid} has no usable price (spot/ema both empty) — price "
+            "decode may have broken; check bittensor vs runtime version.")
 
     # Seed SN21's current burn from the chain (authoritative); fall back to the
     # Taostats incentive_burn only if the chain map didn't return SN21.
