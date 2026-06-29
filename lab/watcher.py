@@ -39,6 +39,14 @@ WATCH_STATE = DATA_DIR / "lab_watch_state.json"
 DRAFTS_DIR = Path(__file__).resolve().parent / "mechanisms" / "_drafts"
 TIMEOUT = 30
 
+# Open PRs whose title/body mention any of these are surfaced as "proposed" changes
+# (the Consider-this lane) — emission-relevant only, to keep the watchlist signal-rich.
+EMISSION_KEYWORDS = (
+    "emission", "emissions", "tao_weight", "tao weight", "root_prop", "root prop",
+    "burn", "incentive", "dynamic tao", "dtao", "subnet weight", "alpha", "yuma",
+    "consensus", "owner cut", "owner_cut", "halving",
+)
+
 
 def _headers() -> dict:
     h = {"Accept": "application/vnd.github+json", "User-Agent": "SN21-Lab-Watcher/1.0"}
@@ -59,6 +67,63 @@ def _latest_release() -> dict | None:
     except Exception as e:  # noqa: BLE001
         logger.warning("GitHub release fetch failed: %s", e)
         return None
+
+
+def _open_prs() -> list:
+    """Open PRs (most-recently-updated first). Empty list on any failure."""
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{REPO}/pulls"
+            "?state=open&per_page=50&sort=updated&direction=desc",
+            headers=_headers(), timeout=TIMEOUT)
+        r.raise_for_status()
+        prs = r.json()
+        return prs if isinstance(prs, list) else []
+    except Exception as e:  # noqa: BLE001
+        logger.warning("GitHub PR fetch failed: %s", e)
+        return []
+
+
+def _is_emission_pr(pr: dict) -> bool:
+    text = ((pr.get("title") or "") + " " + (pr.get("body") or "")[:600]).lower()
+    return any(k in text for k in EMISSION_KEYWORDS)
+
+
+def _scan_proposed_prs(state: dict) -> tuple[list, list]:
+    """Refresh the proposed-change watchlist from open emission-relevant PRs.
+
+    Returns (all_current, fresh) where `fresh` are PRs not previously seen — these
+    drive the Telegram notice. The watchlist is awareness-only ("Consider this"): it
+    records the PR, it does not draft or run anything.
+    """
+    known = {p.get("number") for p in state.get("proposed_prs", []) if isinstance(p, dict)}
+    current, fresh = [], []
+    for pr in _open_prs():
+        if not _is_emission_pr(pr):
+            continue
+        entry = {
+            "number": pr.get("number"),
+            "title": (pr.get("title") or "").strip(),
+            "url": pr.get("html_url"),
+            "updated_at": pr.get("updated_at"),
+            "merged": False,
+            "deploy_stage": "proposed",
+            "stance": "Consider this",
+        }
+        current.append(entry)
+        if entry["number"] not in known:
+            fresh.append(entry)
+    current.sort(key=lambda e: e.get("updated_at") or "", reverse=True)
+    return current, fresh
+
+
+def proposed_changes() -> list:
+    """The current proposed-PR watchlist (Consider-this lane) from watch state."""
+    state = load_json(WATCH_STATE, {})
+    if not isinstance(state, dict):
+        return []
+    prs = state.get("proposed_prs", [])
+    return prs if isinstance(prs, list) else []
 
 
 def _slug(tag: str) -> str:
@@ -116,14 +181,34 @@ def check_for_updates(notify: bool = True) -> dict:
     seen = set(state.get("drafted_tags", []))
     last = state.get("last_seen_tag")
 
+    # Refresh the proposed-change watchlist (Consider-this lane) on every poll.
+    proposed, fresh_prs = _scan_proposed_prs(state)
+    state["proposed_prs"] = proposed
+    if fresh_prs:
+        state["proposed_checked_utc"] = datetime.now(timezone.utc).isoformat()
+        save_json(WATCH_STATE, state)
+        if notify:
+            lines = "\n".join(f"• #{p['number']} {p['title']}\n  {p['url']}" for p in fresh_prs[:5])
+            try:
+                from digest.channels import telegram as telegram_channel
+                telegram_channel.send(
+                    f"🧪 SN21 Lab — {len(fresh_prs)} new proposed emission PR(s) "
+                    f"(Consider this — modelling not started):\n\n{lines}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Lab watch proposed-PR notice failed: %s", e)
+
     rel = _latest_release()
     if not rel:
-        return {"checked": True, "new": False, "reason": "no release data"}
+        save_json(WATCH_STATE, state)
+        return {"checked": True, "new": False, "reason": "no release data",
+                "proposed": len(proposed), "fresh_prs": len(fresh_prs)}
 
     tag = rel.get("tag_name") or rel.get("name") or "unknown"
     url = rel.get("html_url") or f"https://github.com/{REPO}/releases"
     if tag == last or tag in seen:
-        return {"checked": True, "new": False, "last_seen_tag": tag}
+        save_json(WATCH_STATE, state)
+        return {"checked": True, "new": False, "last_seen_tag": tag,
+                "proposed": len(proposed), "fresh_prs": len(fresh_prs)}
 
     draft_path = _write_stub(tag, url)
     seen.add(tag)
@@ -152,7 +237,8 @@ def check_for_updates(notify: bool = True) -> dict:
             logger.warning("Lab watch Telegram notice failed: %s", e)
 
     logger.info("Lab watch: new release %s -> draft %s (notified=%s)", tag, draft_path.name, sent)
-    return {"checked": True, "new": True, "tag": tag, "draft": str(draft_path), "notified": sent}
+    return {"checked": True, "new": True, "tag": tag, "draft": str(draft_path), "notified": sent,
+            "proposed": len(proposed), "fresh_prs": len(fresh_prs)}
 
 
 if __name__ == "__main__":

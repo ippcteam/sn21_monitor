@@ -70,18 +70,32 @@ def latest_run() -> dict | None:
     return runs[-1] if runs else None
 
 
-def registry_meta() -> list:
-    """Serializable view of the mechanism registry for the dashboard selector."""
-    return [
-        {
+def registry_meta(current_block: int | None = None) -> list:
+    """Serializable view of the mechanism registry for the dashboard selector.
+
+    Each entry carries its deploy-pipeline stage (proposed/testnet/mainnet) and the
+    matching evaluation stance (Consider this / Plan for this / Go now). Stage is
+    derived against the live finney block, so mainnet activation is detected the run
+    after a mechanism's activation_block is reached; falls back to the latest run's
+    block when no block is supplied.
+    """
+    if current_block is None:
+        lr = latest_run()
+        current_block = (lr or {}).get("block")
+    out = []
+    for m in M.REGISTRY.values():
+        stage = M.deploy_stage(m, current_block)
+        out.append({
             "id": m.id,
             "label": m.label,
             "pr_url": m.pr_url,
             "activation_block": m.activation_block,
+            "merged": m.merged,
+            "deploy_stage": stage,
+            "stance": M.stance_for(stage),
             "notes": m.notes,
-        }
-        for m in M.REGISTRY.values()
-    ]
+        })
+    return out
 
 
 def now_iso() -> str:

@@ -27,6 +27,43 @@ class Mechanism:
     activation_block: int | None
     score: Callable[[dict, dict], float]
     notes: str
+    merged: bool | None = None   # source PR merged into subtensor? None = unknown
+    stage: str | None = None     # explicit lifecycle override; else derived (see deploy_stage)
+
+
+# Lifecycle → our evaluation stance. The three lanes the operator decides across:
+#   proposed  (open PR, not merged)        -> Consider this  (model it, don't act)
+#   testnet   (merged, not yet mainnet)    -> Plan for this  (real; prep our response)
+#   mainnet   (activated on finney)        -> Go now         (live; act on the recs)
+STAGE_STANCE = {
+    "proposed": "Consider this",
+    "testnet": "Plan for this",
+    "mainnet": "Go now",
+}
+
+
+def deploy_stage(mech: "Mechanism", current_block: int | None = None) -> str:
+    """Where this change lives in the deploy pipeline. Explicit `stage` wins; else
+    derive from activation_block + the merged-PR heuristic (the chosen testnet signal):
+      - activation_block set and reached on finney   -> mainnet
+      - activation_block set but still in the future  -> testnet (confirmed, scheduled)
+      - no activation_block but the PR is merged       -> testnet (merged-PR heuristic)
+      - otherwise                                       -> proposed
+    """
+    if mech.stage in STAGE_STANCE:
+        return mech.stage
+    ab = mech.activation_block
+    if ab is not None:
+        if current_block is not None and ab <= current_block:
+            return "mainnet"
+        return "testnet"
+    if mech.merged:
+        return "testnet"
+    return "proposed"
+
+
+def stance_for(stage: str) -> str:
+    return STAGE_STANCE.get(stage, "Consider this")
 
 
 REGISTRY: dict[str, Mechanism] = {}

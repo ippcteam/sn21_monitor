@@ -54,6 +54,7 @@ register(Mechanism(
     label="Root Reborn (root_prop x price x (1-burn))",
     pr_url=PR_URL,
     activation_block=ACTIVATION_BLOCK,
+    merged=True,  # shipped in release v3.4.6-421; mainnet activation block still unconfirmed
     score=_score,
     notes=("The doc's three-switch model. root_prop front-loads emission to young "
            "subnets; price couples emission to market salary; (1-b) is the "

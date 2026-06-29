@@ -34,6 +34,7 @@ register(Mechanism(
     label="Incumbent (price-weighted dynamic TAO)",
     pr_url=PR_URL,
     activation_block=None,
+    stage="mainnet",  # this IS the live finney mechanism -> Go now
     score=_score,
     notes=("First-principles model of the live mechanism for the reproduction gate. "
            "Known to miss tolerance vs actual emission — flags that exact source "

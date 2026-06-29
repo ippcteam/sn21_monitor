@@ -472,6 +472,37 @@
       color: var(--red);
     }
     .burn-pill.live { background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.35); color: var(--green); }
+
+    /* Lab change pipeline: Consider this / Plan for this / Go now */
+    .pipeline-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 0.5rem; }
+    @media (max-width: 820px) { .pipeline-grid { grid-template-columns: 1fr; } }
+    .pipeline-lane {
+      background: var(--card); border: 1px solid var(--border);
+      border-top-width: 3px; border-radius: 8px; padding: 0.6rem 0.7rem;
+    }
+    .pipeline-lane.proposed { border-top-color: var(--amber); }
+    .pipeline-lane.testnet  { border-top-color: var(--blue); }
+    .pipeline-lane.mainnet  { border-top-color: var(--green); }
+    .pipeline-lane h4 {
+      margin: 0 0 0.1rem; font-size: 0.7rem; font-weight: 600;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .pipeline-lane .lane-stance { font-size: 0.62rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+    .pipeline-lane ul { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+    .pipeline-lane li { font-size: 0.72rem; line-height: 1.35; }
+    .pipeline-lane li a { color: var(--blue-lt); text-decoration: none; }
+    .pipeline-lane li a:hover { text-decoration: underline; }
+    .pipeline-lane .lane-empty { font-size: 0.7rem; color: var(--muted); font-style: italic; }
+    .pipeline-lane li .pr-ref { color: var(--muted); font-family: var(--mono); font-size: 0.62rem; }
+    .stage-badge {
+      display: inline-flex; align-items: center;
+      padding: 0.05rem 0.4rem; border-radius: 3px;
+      font-family: var(--mono); font-size: 0.58rem;
+      letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+    }
+    .stage-badge.proposed { background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.4); color: var(--amber); }
+    .stage-badge.testnet  { background: rgba(37,99,235,0.12);  border: 1px solid rgba(37,99,235,0.4);  color: var(--blue-lt); }
+    .stage-badge.mainnet  { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); color: var(--green); }
   </style>
 </head>
 <body>
@@ -746,6 +777,11 @@
       <span id="labMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
       <select id="labMechanism" style="margin-left:auto;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.3rem 0.5rem;font-family:inherit;font-size:0.7rem"></select>
       <button class="btn-sm primary" onclick="triggerLabRun()" title="Pull live chain state, run the reproduction gate + scenarios S1–S5 (~30–60s)">Run lab (~45s)</button>
+    </div>
+
+    <div class="section-label">Change pipeline · where each mechanism lives → what we do about it</div>
+    <div class="pipeline-grid" id="labPipeline">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
 
     <div id="labGateBanner" class="alert-banner" style="margin-top:0.75rem"></div>
@@ -1763,19 +1799,72 @@ const _tabLoaders = {
 
 /* ── Emission Lab tab ─────────────────────────────────────────── */
 let _labMechLoaded = false;
+let _labStageMap = {};  // mechanism id -> { deploy_stage, stance } for history pills
+
+const STAGE_META = {
+  proposed: { label: 'Proposed', stance: 'Consider this', hint: 'Open PR — on our radar; model it, don’t act yet.' },
+  testnet:  { label: 'In testnet', stance: 'Plan for this', hint: 'Merged, not yet activated on mainnet — prep our response.' },
+  mainnet:  { label: 'Live now', stance: 'Go now', hint: 'Activated on finney — act on the recommendations.' },
+};
+
+function stageBadge(stage) {
+  const m = STAGE_META[stage]; if (!m) return '';
+  return `<span class="stage-badge ${stage}" title="${m.hint}">${m.label} · ${m.stance}</span>`;
+}
 
 async function loadLabMechanisms() {
   if (_labMechLoaded) return;
   try {
     const r = await fetch('/api/lab/mechanisms');
     const d = await r.json();
+    const mechs = d.mechanisms || [];
+    _labStageMap = {};
+    mechs.forEach(m => { _labStageMap[m.id] = { deploy_stage: m.deploy_stage, stance: m.stance }; });
+
     const sel = document.getElementById('labMechanism');
-    sel.innerHTML = (d.mechanisms || [])
+    sel.innerHTML = mechs
       .filter(m => m.id !== 'incumbent')
-      .map(m => `<option value="${m.id}" title="${(m.notes||'').replace(/"/g,'&quot;')}">${m.label}</option>`)
+      .map(m => {
+        const s = STAGE_META[m.deploy_stage];
+        const tag = s ? `[${s.stance}] ` : '';
+        return `<option value="${m.id}" title="${(m.notes||'').replace(/"/g,'&quot;')}">${tag}${m.label}</option>`;
+      })
       .join('');
+
+    renderLabPipeline(mechs, d.proposed || []);
     _labMechLoaded = true;
   } catch (e) { console.error('lab mechanisms load failed', e); }
+}
+
+function renderLabPipeline(mechs, proposedPrs) {
+  const el = document.getElementById('labPipeline');
+  if (!el) return;
+  // Registered mechanisms grouped by stage, plus watchlist PRs in the proposed lane.
+  const lanes = { proposed: [], testnet: [], mainnet: [] };
+  mechs.forEach(m => {
+    const stage = m.deploy_stage || 'proposed';
+    const href = (m.pr_url && m.pr_url.startsWith('http')) ? m.pr_url : null;
+    const name = href ? `<a href="${href}" target="_blank" rel="noopener">${m.label}</a>` : m.label;
+    (lanes[stage] || lanes.proposed).push(`<li>${name}</li>`);
+  });
+  (proposedPrs || []).forEach(p => {
+    const ref = p.number != null ? `<span class="pr-ref">#${p.number}</span> ` : '';
+    const name = p.url ? `<a href="${p.url}" target="_blank" rel="noopener">${p.title || ('PR #'+p.number)}</a>` : (p.title || ('PR #'+p.number));
+    lanes.proposed.push(`<li>${ref}${name}</li>`);
+  });
+
+  el.innerHTML = ['proposed','testnet','mainnet'].map(stage => {
+    const m = STAGE_META[stage];
+    const items = lanes[stage];
+    const body = items.length
+      ? `<ul>${items.join('')}</ul>`
+      : `<div class="lane-empty">Nothing here right now.</div>`;
+    return `<div class="pipeline-lane ${stage}">
+      <h4>${m.label} <span class="stage-badge ${stage}">${m.stance}</span></h4>
+      <div class="lane-stance">${m.hint}</div>
+      ${body}
+    </div>`;
+  }).join('');
 }
 
 async function loadLabTab() {
@@ -1946,8 +2035,10 @@ async function loadLabHistory() {
           ? `<span style="color:var(--green)">PASS</span>`
           : `<span style="color:var(--red)">FAIL</span>`;
         const err = rep.relative_error != null ? ` <span style="color:var(--muted)">${(rep.relative_error*100).toFixed(1)}%</span>` : '';
+        const st = _labStageMap[rn.mechanism_version];
+        const stage = st ? ` ${stageBadge(st.deploy_stage)}` : '';
         return `<tr><td style="white-space:nowrap">${(rn.fetched_at_utc||'').replace('T',' ').slice(0,16)}</td>
-          <td>${fmtInt(rn.block)}</td><td>${rn.mechanism_version||'—'}</td><td>${gate}${err}</td>
+          <td>${fmtInt(rn.block)}</td><td>${rn.mechanism_version||'—'}${stage}</td><td>${gate}${err}</td>
           <td style="color:var(--muted);font-size:0.7rem">${rn.headline||'—'}</td></tr>`;
       }).join('') + `</tbody></table></div>`;
   } catch (e) { el.innerHTML = `<div class="no-data">history load failed</div>`; }
