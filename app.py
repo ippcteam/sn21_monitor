@@ -46,6 +46,7 @@ from movers_attribution import (
     run_backtest as movers_run_backtest,
 )
 from social_posts import own_posts as social_own_posts
+from demand_signal import demand_series as social_demand_series
 from subnet_sync import SUBNET_DAILY_STORE, sync_subnet_daily
 from taostats_sync import TAOSTATS_STORE, sync_owner_transfers
 from weights_scan import (
@@ -718,6 +719,16 @@ async def api_social_posts(_=Depends(require_auth)):
         return social_own_posts()
     except Exception as e:
         logger.exception("Social posts fetch failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/social/demand")
+async def api_social_demand(_=Depends(require_auth)):
+    """SN21 holder base + protocol buy pressure over time (the off-protocol demand signature)."""
+    try:
+        return social_demand_series()
+    except Exception as e:
+        logger.exception("Social demand series failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
