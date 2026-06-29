@@ -431,6 +431,50 @@
       border-color: rgba(245,158,11,0.5);
       color: var(--amber);
     }
+
+    /* ── Movers: per-operator accordion groups ── */
+    .group-section-label {
+      display: flex; align-items: baseline; gap: 0.6rem;
+      padding: 0.85rem 1.5rem 0.5rem;
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 600;
+      border-top: 1px solid var(--border);
+    }
+    .group-section-label:first-child { border-top: none; }
+    .group-section-label .sub {
+      font-weight: 400; letter-spacing: 0.02em; text-transform: none;
+      color: var(--muted); font-size: 0.65rem;
+    }
+    details.op-group { border-bottom: 1px solid rgba(30,45,66,0.5); }
+    details.op-group:last-child { border-bottom: none; }
+    details.op-group > summary {
+      display: grid;
+      grid-template-columns: 1.2rem 1fr auto auto auto;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 1.5rem;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      list-style: none;
+      user-select: none;
+    }
+    details.op-group > summary::-webkit-details-marker { display: none; }
+    details.op-group > summary:hover { background: rgba(37,99,235,0.04); }
+    .op-caret { color: var(--muted); font-size: 0.6rem; transition: transform 0.15s; }
+    details.op-group[open] > summary .op-caret { transform: rotate(90deg); }
+    .op-name { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .op-keys { color: var(--muted); font-size: 0.62rem; letter-spacing: 0.05em; }
+    .op-net { text-align: right; }
+    .op-net-tao { text-align: right; color: var(--muted); }
+    details.op-group > .op-members { background: rgba(0,0,0,0.12); }
+    details.op-group > .op-members table { font-size: 0.72rem; }
+    details.op-group > .op-members td:first-child,
+    details.op-group > .op-members th:first-child { padding-left: 3rem; }
     .filter-bar {
       display: flex; align-items: center; gap: 0.5rem;
       margin-bottom: 0.75rem;
@@ -2482,6 +2526,66 @@ async function triggerSubnetSync() {
   } catch (e) { alert(e); }
 }
 
+/* ── Movement tab: per-operator grouped movers ──────────────── */
+function netColor(v) {
+  return v > 0 ? 'var(--green)' : (v < 0 ? 'var(--red)' : 'var(--muted)');
+}
+
+function renderMoverMemberRow(m) {
+  const dirColor = netColor(m.alpha_delta);
+  const status = m.is_new ? '<span style="color:var(--blue-lt)">NEW</span>'
+    : m.is_exited ? '<span style="color:var(--red)">EXITED</span>'
+    : (m.alpha_delta > 0 ? '<span style="color:var(--green)">BOUGHT</span>'
+       : '<span style="color:var(--red)">SOLD</span>');
+  return `<tr>
+    <td class="mono" style="color:var(--text-dim)" title="${m.hotkey || ''}">${m.hotkey_name || (m.hotkey || '').slice(0,12) + '…'}</td>
+    <td class="mono" style="color:var(--muted)" title="${m.coldkey || ''}">${(m.coldkey || '').slice(0,10)}…</td>
+    <td class="mono">${fmtAlpha(m.alpha_now, 4)}</td>
+    <td class="mono" style="color:var(--muted)">${fmtAlpha(m.alpha_prev, 4)}</td>
+    <td class="mono" style="color:${dirColor}">${m.alpha_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_delta, 4)}</td>
+    <td class="mono" style="color:${dirColor}">${m.alpha_as_tao_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_as_tao_delta, 4)} τ</td>
+    <td class="mono">${status}</td>
+  </tr>`;
+}
+
+function renderOperatorGroup(g) {
+  const c = netColor(g.net_alpha);
+  // A single-key operator has nothing extra to reveal — render it open by default.
+  const openAttr = g.key_count <= 1 ? ' open' : '';
+  return `<details class="op-group"${openAttr}>
+    <summary>
+      <span class="op-caret">▶</span>
+      <span class="op-name" title="${g.operator}">${g.operator}</span>
+      <span class="op-keys">${g.key_count} key${g.key_count === 1 ? '' : 's'}</span>
+      <span class="op-net mono" style="color:${c}">${g.net_alpha >= 0 ? '+' : ''}${fmtAlpha(g.net_alpha, 2)} ξ</span>
+      <span class="op-net-tao mono">${g.net_alpha_as_tao >= 0 ? '+' : ''}${fmtAlpha(g.net_alpha_as_tao, 2)} τ</span>
+    </summary>
+    <div class="op-members table-wrap">
+      <table>
+        <thead><tr>
+          <th>Hotkey</th><th>Coldkey</th><th>α today</th><th>α yesterday</th>
+          <th>Δ α</th><th>Δ τ-equiv</th><th>Status</th>
+        </tr></thead>
+        <tbody>${g.members.map(renderMoverMemberRow).join('')}</tbody>
+      </table>
+    </div>
+  </details>`;
+}
+
+function renderMoverSection(title, groups, netAlpha, opCount, keyCount) {
+  const c = netColor(netAlpha || 0);
+  const body = groups.length
+    ? groups.map(renderOperatorGroup).join('')
+    : '<div class="no-data" style="padding:1.5rem"><span>No movement</span></div>';
+  return `
+    <div class="group-section-label">
+      ${title}
+      <span class="sub">net <span style="color:${c}">${(netAlpha || 0) >= 0 ? '+' : ''}${fmtAlpha(netAlpha || 0, 2)} ξ</span>
+      · ${opCount || 0} operator${opCount === 1 ? '' : 's'} · ${keyCount || 0} key${keyCount === 1 ? '' : 's'}</span>
+    </div>
+    ${body}`;
+}
+
 /* ── Movement tab loader ────────────────────────────────────── */
 async function loadMovementTab() {
   const ourEl = document.getElementById('ourMovementCards');
@@ -2548,47 +2652,21 @@ async function loadMovementTab() {
       ' · holders ' + (move.today_holder_count || '—') + ' (was ' + (move.prior_holder_count ?? '—') +
       ', new ' + (move.new_positions || 0) + ', exited ' + (move.exited_positions || 0) + ')';
 
-    if (!move.movers?.length) {
+    const houseGroups = move.house_groups || [];
+    const otherGroups = move.other_groups || [];
+    if (!houseGroups.length && !otherGroups.length) {
       moversEl.innerHTML = '<div class="no-data"><span>Need a second snapshot tomorrow to compute movement</span></div>';
       return;
     }
     moversEl.innerHTML = `
       <div class="table-header">
-        <span class="table-title">Top movers</span>
+        <span class="table-title">Top movers · by operator</span>
         <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
           inflows ${fmtAlpha(move.inflows_alpha, 2)} ξ · outflows ${fmtAlpha(move.outflows_alpha, 2)} ξ
-          · House +${fmtAlpha(move.house_inflows_alpha || 0, 2)} / -${fmtAlpha(move.house_outflows_alpha || 0, 2)}
-          · Other +${fmtAlpha(move.other_inflows_alpha || 0, 2)} / -${fmtAlpha(move.other_outflows_alpha || 0, 2)}
         </span>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>House</th><th>Hotkey</th><th>Coldkey</th><th>α today</th><th>α yesterday</th>
-            <th>Δ α</th><th>Δ τ-equiv</th><th>Status</th>
-          </tr></thead>
-          <tbody>
-            ${move.movers.map(m => {
-              const dirColor = m.alpha_delta > 0 ? 'var(--green)' : (m.alpha_delta < 0 ? 'var(--red)' : 'var(--muted)');
-              const status = m.is_new ? '<span style="color:var(--blue-lt)">NEW</span>'
-                : m.is_exited ? '<span style="color:var(--red)">EXITED</span>'
-                : (m.alpha_delta > 0 ? '<span style="color:var(--green)">BOUGHT</span>'
-                   : '<span style="color:var(--red)">SOLD</span>');
-              const houseCell = m.is_house ? '<span class="house-chip">HOUSE</span>' : '<span style="color:var(--muted)">—</span>';
-              return `<tr>
-                <td>${houseCell}</td>
-                <td class="mono" style="color:var(--text-dim)" title="${m.hotkey || ''}">${m.hotkey_name || (m.hotkey || '').slice(0,12) + '…'}</td>
-                <td class="mono" style="color:var(--muted)" title="${m.coldkey || ''}">${(m.coldkey || '').slice(0,10)}…</td>
-                <td class="mono">${fmtAlpha(m.alpha_now, 4)}</td>
-                <td class="mono" style="color:var(--muted)">${fmtAlpha(m.alpha_prev, 4)}</td>
-                <td class="mono" style="color:${dirColor}">${m.alpha_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_delta, 4)}</td>
-                <td class="mono" style="color:${dirColor}">${m.alpha_as_tao_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_as_tao_delta, 4)} τ</td>
-                <td class="mono">${status}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
+      ${renderMoverSection('House', houseGroups, move.house_net_alpha, move.house_operator_count, move.house_key_count)}
+      ${renderMoverSection('Third party', otherGroups, move.other_net_alpha, move.other_operator_count, move.other_key_count)}`;
   } catch (e) {
     ourEl.innerHTML = `<div class="no-data"><strong>Failed to load movement</strong><span>${e}</span></div>`;
   }
