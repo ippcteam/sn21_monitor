@@ -3,12 +3,13 @@ Lab runner — orchestrates a single lab run.
 
   1. pull live ChainState (lab/chain_pull.py)
   2. REPRODUCTION GATE (§4.3): model the incumbent SN21 emission share and compare
-     it to the chain's ACTUAL per-block share (tao_in_emission). Pass iff the
+     it to the chain's ACTUAL per-block share (tao_in_emission + excess_tao_emission,
+     i.e. liquidity injection + chain buys). Pass iff the
      relative error is within tolerance. This is the credibility anchor — scenario
      results are flagged `trusted` only when the gate passes. A red gate is a valid,
      informative outcome: "the model can't yet rebuild reality — extract the source
      formula (Action 1) before acting", exactly as the doc requires.
-  3. run scenarios S1..S5 for the selected mechanism (lab/scenarios.py)
+  3. run scenarios S1..S6 for the selected mechanism (lab/scenarios.py)
   4. append a lean run record to the versioned log (lab/store.py)
 
 CLI:  python -m lab.runner --live [--version root_reborn_v346_421] [--tol 0.15]
@@ -31,25 +32,37 @@ DEFAULT_VERSION = "root_reborn_v346_421"
 DEFAULT_TOLERANCE = 0.15   # 15% relative error on the reproduction gate
 
 
+def _actual_emission(sub: dict) -> float:
+    """A subnet's ACTUAL per-block TAO emission = liquidity injection + chain buys.
+
+    The coinbase caps injection at root_prop x alpha_emission; emission above the
+    cap is swapped into alpha (SubnetExcessTao) instead of recorded in
+    SubnetTaoInEmission. Summing tao_in_emission alone drops the chain-buy leg
+    (~59% of network emission at block 8.53M) — that omission was the entire
+    "SN21 over-emits 3x / effective burn 0.26" artifact (resolved 2026-07-02:
+    with both legs the two legs sum to the 0.5 TAO/block emission exactly and
+    SN21's rel.err falls 0.64 -> 0.065)."""
+    return (sub.get("tao_in_emission") or 0.0) + (sub.get("excess_tao_emission") or 0.0)
+
+
 def actual_sn21_share(state: dict) -> float | None:
-    """SN21's real share of per-block TAO injection across all subnets — chain ground truth."""
-    tot = sum((s.get("tao_in_emission") or 0.0) for s in state["subnets"])
+    """SN21's real share of per-block TAO emission across all subnets — chain ground truth."""
+    tot = sum(_actual_emission(s) for s in state["subnets"])
     if tot <= 0:
         return None
-    me = sn21(state)
-    return (me.get("tao_in_emission") or 0.0) / tot
+    return _actual_emission(sn21(state)) / tot
 
 
 def sn21_effective_burn(state: dict, mech) -> dict:
     """SN21's EFFECTIVE burn — the b that makes the (1-b) model reproduce SN21's
-    actual TAO-injection share, holding every other subnet at its snapshot burn.
+    actual TAO-emission share, holding every other subnet at its snapshot burn.
 
-    Investigation finding (not a smoothing lag — MinerBurned has been stable/declining
-    for days): SN21 receives ~3x more TAO injection than its nominal MinerBurned
-    implies, so it emits as if its burn were far lower. This effective burn is the
-    price-relevant number: it is the real throttle on SN21's pool TAO injection, and
-    tracking it over runs is how the snapshot->emission transfer function is derived
-    empirically. Solve: actual = S(1-b)/(S(1-b)+Rest), S = price*root_prop_SN21,
+    RESOLVED 2026-07-02: the old ~0.4 nominal-vs-effective gap was a measurement
+    artifact — "actual" summed tao_in_emission only, dropping the SubnetExcessTao
+    chain-buy leg of capped subnets' emission. With both legs counted, effective
+    ~= nominal, i.e. the chain applies exactly the (1-b) it publishes. This is now
+    an INVARIANT CHECK: a re-opened gap means the coinbase changed again.
+    Solve: actual = S(1-b)/(S(1-b)+Rest), S = price*root_prop_SN21,
     Rest = sum of every other subnet's score -> b_eff = 1 - actual*Rest/(S*(1-actual))."""
     me = sn21(state)
     actual = actual_sn21_share(state)
@@ -62,13 +75,18 @@ def sn21_effective_burn(state: dict, mech) -> dict:
     one_minus_b = actual * rest / (S * (1.0 - actual))
     b_eff = max(0.0, min(1.0, 1.0 - one_minus_b))
     nominal = state.get("sn21_miner_burn") or 0.0
+    gap = nominal - b_eff
+    note = (f"INVARIANT OK: effective burn {b_eff:.2f} ~= nominal {nominal:.2f} — the "
+            "chain applies exactly its published (1-b); the (1-b) lever is fully real."
+            if abs(gap) <= 0.10 else
+            f"INVARIANT BROKEN: effective burn {b_eff:.2f} vs nominal {nominal:.2f} "
+            f"(gap {gap:+.2f}) — the coinbase emission path has likely changed again; "
+            "re-read the source before trusting scenario magnitudes.")
     return {
         "nominal_burn": round(nominal, 4),
         "effective_burn": round(b_eff, 4),
-        "gap": round(nominal - b_eff, 4),
-        "note": ("SN21's pool TAO injection is throttled as if burn were "
-                 f"{b_eff:.2f}, not its nominal {nominal:.2f} — it over-emits for its "
-                 "burn. Track this gap over runs to derive the real transfer function."),
+        "gap": round(gap, 4),
+        "note": note,
     }
 
 
@@ -79,11 +97,11 @@ def _network_reproduction(state: dict, mech, tolerance: float):
     burn, like SN21 today, is an outlier, not evidence the formula is wrong)."""
     scores = {s["netuid"]: max(0.0, mech.score(s, state)) for s in state["subnets"]}
     tot = sum(scores.values())
-    te = sum((s.get("tao_in_emission") or 0.0) for s in state["subnets"])
+    te = sum(_actual_emission(s) for s in state["subnets"])
     errs = []
     if tot > 0 and te > 0:
         for s in state["subnets"]:
-            a = (s.get("tao_in_emission") or 0.0) / te
+            a = _actual_emission(s) / te
             if a > 1e-5:  # emitting subnets only
                 errs.append(abs(scores[s["netuid"]] / tot - a) / a)
     errs.sort()
@@ -111,8 +129,7 @@ def reproduction_gate(state: dict, tolerance: float = DEFAULT_TOLERANCE) -> dict
     elif passed:
         note = (f"Formula validated NETWORK-WIDE (median rel.err {median:.3f}, "
                 f"{within}/{n} subnets within tol), but SN21's own error is "
-                f"{sn21_err:.2f} — SN21's burn is mid-transition so its instantaneous "
-                "MinerBurned lags emission. STRUCTURE trusted; SN21 magnitudes directional.")
+                f"{sn21_err:.2f}. STRUCTURE trusted; SN21 magnitudes directional.")
     else:
         note = (f"Formula does NOT reproduce the chain (median rel.err {median}) — "
                 "structural error; treat all magnitudes as directional.")
@@ -216,9 +233,8 @@ def main(argv=None):
     print(f"  trusted = {rec['trusted']}")
     eb = rec.get("effective_burn") or {}
     if eb.get("effective_burn") is not None:
-        print(f"  SN21 burn: nominal {eb['nominal_burn']} -> EFFECTIVE {eb['effective_burn']} "
-              f"(gap {eb['gap']}) — the real throttle on pool TAO injection.")
-    for key in ("S1", "S2", "S3", "S4", "S5"):
+        print(f"  SN21 burn: nominal {eb['nominal_burn']} vs effective {eb['effective_burn']} — {eb['note']}")
+    for key in ("S1", "S2", "S3", "S4", "S5", "S6"):
         sc = rec["scenarios"].get(key, {})
         summ = sc.get("summary") or sc.get("error") or "—"
         print(f"\n[{key}] {summ}")

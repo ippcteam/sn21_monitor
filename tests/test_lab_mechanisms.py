@@ -109,3 +109,62 @@ def test_shares_sum_to_one():
 def test_registry_populated():
     assert "incumbent" in M.REGISTRY
     assert "root_reborn_v346_421" in M.REGISTRY
+
+
+# ── Actual emission = injection + chain-buy legs (excess-TAO gate fix) ────────
+def test_actual_share_counts_excess_tao():
+    """The reproduction ground truth must include SubnetExcessTao (chain buys):
+    tao_in_emission alone drops capped subnets' emission and inflates SN21's
+    apparent share — the old 'SN21 over-emits 3x' artifact."""
+    from lab.runner import actual_sn21_share
+    s = _state()
+    # give subnet 1 a large chain-buy leg; SN21 has none
+    next(x for x in s["subnets"] if x["netuid"] == 1)["excess_tao_emission"] = 0.01
+    with_excess = actual_sn21_share(s)
+    for sub in s["subnets"]:
+        sub.pop("excess_tao_emission", None)
+    without = actual_sn21_share(s)
+    assert with_excess < without  # counting the buy leg deflates SN21's share
+
+
+def test_effective_burn_invariant_ok_when_actual_matches_model():
+    """When 'actual' emission equals the modeled share, effective burn == nominal
+    (the invariant check reads OK — no artifact gap)."""
+    from lab.runner import sn21_effective_burn
+    new = M.get("root_reborn_v346_421")
+    s = _state(b_sn21=0.6)
+    s["root_tao"] = s["root_stake_tao"]
+    scores = {sub["netuid"]: new.score(sub, s) for sub in s["subnets"]}
+    tot = sum(scores.values())
+    for sub in s["subnets"]:
+        sub["tao_in_emission"] = scores[sub["netuid"]] / tot
+        sub["excess_tao_emission"] = 0.0
+    out = sn21_effective_burn(s, new)
+    assert out["effective_burn"] == pytest.approx(0.6, abs=0.01)
+    assert "INVARIANT OK" in out["note"]
+
+
+# ── S6: burn → price trajectory properties ────────────────────────────────────
+def _s6_state(b=0.7):
+    s = _state(b_sn21=b)
+    s["root_tao"] = s["root_stake_tao"]
+    s["owner_cut"] = 0.18
+    for sub in s["subnets"]:
+        sub["excess_tao_emission"] = 0.0005
+        sub["alpha_out_emission"] = 1.0
+    return s
+
+
+def test_s6_deeper_cut_higher_price_at_no_dump():
+    from lab.scenarios import s6_burn_price
+    out = s6_burn_price(_s6_state(), burns=(None, 0.35, 0.0), dump_fracs=(0.0,), days=90)
+    rows = {r["b"]: r["d90_vs_hold_pct"] for r in out["table"]}
+    assert rows[0.0] >= rows[0.35] >= rows[0.7] == pytest.approx(0.0, abs=0.01)
+
+
+def test_s6_full_dump_can_underperform_hold():
+    from lab.scenarios import s6_burn_price
+    out = s6_burn_price(_s6_state(), burns=(None, 0.0), dump_fracs=(0.0, 1.0), days=90)
+    full = next(r for r in out["table"] if r["b"] == 0.0 and r["dump_frac"] == 1.0)
+    none = next(r for r in out["table"] if r["b"] == 0.0 and r["dump_frac"] == 0.0)
+    assert full["d90_vs_hold_pct"] < none["d90_vs_hold_pct"]

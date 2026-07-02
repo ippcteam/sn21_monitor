@@ -12,17 +12,23 @@ S1..S5 results and returns: current standing, a risk register (the two risks to
 avoid), and a ranked list of concrete actions — each tagged with its expected
 effect on price and on owner alpha, the guardrail it respects, and a confidence.
 
-Honest framing on burn (RESOLVED by Action 1 — subtensor coinbase source read):
-lowering burn helps PRICE (deeper pool via more emission injection), lowers
-EMISSION-BLOCKING risk, AND raises owner alpha. The old worry — that burn routes
+Honest framing on burn (RESOLVED by Action 1 — subtensor coinbase source read;
+magnitudes CONFIRMED 2026-07-02 once the gate counted the excess-TAO chain-buy leg):
+lowering burn raises SN21's renormalised (1-b) network slice exactly linearly — the
+old "effective burn" gap was a measurement artifact. The old worry — that burn routes
 the miner allocation to the owner key — is FALSE: the coinbase BURNS withheld miner
 incentive (destroyed/recycled via burn_subnet_alpha; the owner receives nothing).
-The owner's only emission is the separate 18% SubnetOwnerCut, taken before the
-split and paid as staked alpha. Because the live `(1 - MinerBurned)` split shrinks
-SN21's renormalised NETWORK slice (reallocating it to other subnets), lower burn =
-bigger slice = bigger alpha emission = bigger 18% owner cut. So all three objectives
-point the same way — there is no owner-alpha trade-off. Only the magnitude is
-gate-directional (reproduction rel.err ~0.34; residual = exact root_proportion).
+
+Two magnitude corrections encoded here (2026-07-02):
+1. OWNER ALPHA QUANTITY IS BURN-INDEPENDENT — alpha_out is 1/block for every subnet,
+   so the 18% SubnetOwnerCut is a fixed ~1,296 alpha/day at ANY burn. Cutting burn
+   raises the VALUE of that fixed alpha via price, not its amount. (An earlier
+   version claimed the owner cut scales with the (1-b) slice — wrong.)
+2. PRICE ONLY MOVES VIA CHAIN BUYS (S6). Liquidity injection adds both pool sides at
+   spot; the direct price channel is the excess TAO above the injection cap
+   (root_prop x alpha_emission), which today opens only once burn drops below ~0.5.
+   Shallow cuts buy depth, not price — the price case is for DEEP cuts (b <= 0.2),
+   staged, with realized miner dump kept below the S5 breakeven.
 """
 
 from __future__ import annotations
@@ -110,10 +116,14 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
     S3 = scenarios.get("S3", {}) or {}
     S4 = scenarios.get("S4", {}) or {}
     S5 = scenarios.get("S5", {}) or {}
+    S6 = scenarios.get("S6", {}) or {}
 
     share_now = (S2.get("inputs") or {}).get("share_current_pct")
     share_b0 = (S2.get("inputs") or {}).get("share_no_burn_pct")
-    owner_uplift = (share_b0 / share_now - 1.0) if (share_now and share_b0) else None
+    # best 90/180-day price uplift vs holding, at the 15%-dump planning case (S6)
+    s6_rows = [r for r in (S6.get("table") or []) if r.get("dump_frac") == 0.15]
+    s6_best = max(s6_rows, key=lambda r: r["d90_vs_hold_pct"], default=None) if s6_rows else None
+    s6_in = S6.get("inputs") or {}
 
     ps = _price_standing(state)
     scored = _scored_miners()
@@ -123,28 +133,34 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
 
     actions = []
 
-    # 1 — Burn (master lever; aligns price + owner alpha + legibility)
+    # 1 — Burn (master lever; aligns price + owner-alpha VALUE + legibility)
     if b_now > 0.001:
         target_b = s5_in.get("target_b")
         # safe single step from S5: largest sell_fraction keeping net pool flow >= 0
         safe_rows = [r for r in (S5.get("table") or []) if r.get("net_positive")]
         safe_dump = max((r["miner_sell_fraction"] for r in safe_rows), default=0.0)
+        price_txt = ("↑ only once burn < ~0.5 (chain-buy threshold "
+                     f"~{s6_in.get('chain_buy_threshold_tao_day')} TAO/day); "
+                     f"best S6 case at 15% dump: {s6_best['d90_vs_hold_pct']:+.1f}% @90d / "
+                     f"{s6_best['d180_vs_hold_pct']:+.1f}% @180d at b={s6_best['b']:.2f}"
+                     if s6_best else
+                     "↑ via chain buys only below the injection-cap threshold (S6)")
         actions.append({
             "priority": 1,
             "lever": "Burn rate",
-            "action": (f"Reduce burn from b={b_now:.2f} toward 0 — next step to "
-                       f"b≈{target_b:.2f}." if target_b is not None else
-                       f"Reduce burn from b={b_now:.2f} toward 0."),
-            "effect_price": "↑ (bigger network slice → more TAO injection → deeper pool & staker yield)",
-            "effect_owner_alpha": (f"↑ up to +{owner_uplift*100:.0f}% at b=0 vs now "
-                                   f"(bigger un-burned slice → bigger 18% owner cut)"
-                                   if owner_uplift else "↑ (18% owner cut scales with the (1−b) slice)"),
+            "action": (f"Reduce burn from b={b_now:.2f} DEEP (target ≤0.2, then 0) in staged "
+                       f"steps — next step to b≈{target_b:.2f}. Shallow cuts (stopping above "
+                       f"~0.5) add pool depth but ~zero price." if target_b is not None else
+                       f"Reduce burn from b={b_now:.2f} deep toward 0 (price channel opens below ~0.5)."),
+            "effect_price": price_txt,
+            "effect_owner_alpha": (f"quantity FIXED at ~{s6_in.get('owner_alpha_day', 1296):,.0f}/day "
+                                   "(18% cut is burn-independent); its VALUE rises with price"),
             "guardrail": (f"Emission-blocking risk ↓. Safe if miners dump ≤ "
-                          f"~{safe_dump:.0%} of the freed alpha (S5)."),
-            "confidence": "HIGH on price, owner alpha AND emission-blocking. Action 1 (source) "
-                          "CONFIRMS burn pays the owner nothing (it's destroyed) and the (1−b) split "
-                          "shrinks SN21's network slice — so all three goals align on reducing it. "
-                          "Magnitude is gate-directional (rel.err ~0.34; residual = exact root_proportion).",
+                          f"~{safe_dump:.0%} of the freed alpha per S5 grid (fine-grained "
+                          f"breakeven ~15%); route freed emission to an aligned miner set."),
+            "confidence": "HIGH — source-read (run_coinbase.rs) + gate now reproduces SN21 within "
+                          "tolerance once chain buys are counted; the (1−b) slice is exactly linear "
+                          "and the owner captures none of the burn (destroyed).",
         })
     else:
         actions.append({
@@ -189,7 +205,10 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
     verdict_bits = []
     if b_now > 0.001:
         tgt = s5_in.get("target_b")
-        verdict_bits.append(f"reduce burn {b_now:.2f}→{tgt:.2f}" if tgt is not None else "reduce burn")
+        verdict_bits.append(
+            (f"reduce burn {b_now:.2f}→{tgt:.2f} now, staged on to ≤0.2 "
+             f"(price channel opens below ~0.5)") if tgt is not None
+            else "reduce burn deep (≤0.2; price channel opens below ~0.5)")
     if opt:
         verdict_bits.append(f"extract ≤{opt.get('alpha_per_week'):,.0f} alpha/wk")
     verdict = ("To grow price + owner alpha: " + ", ".join(verdict_bits) +
@@ -209,7 +228,8 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
             "burn_b": round(b_now, 4),
             "emission_share_now_pct": share_now,
             "emission_share_no_burn_pct": share_b0,
-            "owner_alpha_uplift_to_b0_pct": round(owner_uplift * 100, 1) if owner_uplift else None,
+            "owner_alpha_per_day": s6_in.get("owner_alpha_day"),   # fixed at every burn level
+            "price_uplift_90d_pct_at_15pct_dump": s6_best["d90_vs_hold_pct"] if s6_best else None,
             "root_prop_now": (S3.get("inputs") or {}).get("root_prop_now"),
             **ps,
             "scored_miners": scored,

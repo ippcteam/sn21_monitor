@@ -264,12 +264,124 @@ def s5_dump_safety(state: dict, target_b: float | None = None, step: float = 0.1
     }
 
 
+# ── S6 — burn → alpha-price trajectory ───────────────────────────────────────
+def s6_burn_price(state: dict,
+                  burns=(0.778, None, 0.65, 0.50, 0.35, 0.20, 0.10, 0.0),
+                  dump_fracs=(0.0, 0.15, 0.30, 0.50, 1.0),
+                  days: int = 180, ema_tc_days: float = 7.0) -> dict:
+    """Simulate SN21's alpha price at candidate MinerBurned levels x miner-dump
+    fractions, using the exact v3.4.8+ coinbase split (run_coinbase.rs):
+
+      - a subnet's block TAO emission = share x block_emission, where share is the
+        renormalised ema_price x root_prop x (1-b) (the mechanism model);
+      - liquidity injection is CAPPED at root_prop x alpha_emission; injection adds
+        BOTH sides of the pool at spot (deepens, does not move price);
+      - emission above the cap becomes excess TAO -> CHAIN BUYS (swaps TAO for
+        alpha), which move price UP. This is the only direct price channel, and it
+        only opens once emission exceeds the cap (b below ~0.5 today);
+      - freed miner alpha (vs the CURRENT chain burn) x dump_frac is sold into the
+        pool daily (price DOWN);
+      - reflexive loop: ema_price follows spot (~ema_tc_days), share follows ema;
+        root_prop decays as issuance grows.
+
+    `None` in burns is replaced by the current chain burn (the hold baseline).
+    All trajectories are ceteris paribus (no organic flows) — read them as
+    RELATIVE to the hold-current baseline, not absolute forecasts."""
+    new = M.get("root_reborn_v346_421")
+    me = _sn21(state)
+    b_now = state.get("sn21_miner_burn") or 0.0
+    blocks_day = 86400.0 / BLOCK_SECONDS
+    # actual network block emission = injection + chain-buy legs (0.5 TAO/block live)
+    block_emission = sum(((s.get("tao_in_emission") or 0.0) +
+                          (s.get("excess_tao_emission") or 0.0)) for s in state["subnets"])
+    # cross-subnet denominator excluding SN21 (others held at snapshot)
+    d_rest = sum(max(0.0, new.score(s, state)) for s in state["subnets"]
+                 if s["netuid"] != state.get("netuid", 21))
+    root_tao = state.get("root_tao") or state.get("root_stake_tao") or 0.0
+    tw = root_tao * (state.get("tao_weight") or 0.0)
+    owner_cut = state.get("owner_cut") or 0.18
+    alpha_emission = me.get("alpha_out_emission") or 1.0
+    alpha_out_day = alpha_emission * blocks_day
+    # miner incentive pool: alpha_out minus owner cut, 50% miner split
+    miner_pool_day = 0.5 * (1.0 - owner_cut) * alpha_out_day
+
+    if not (me.get("alpha_in") and me.get("tao_in") and block_emission > 0 and d_rest > 0):
+        return {"error": "S6 needs pool reserves, per-subnet emission (incl. excess) and root_tao"}
+
+    def simulate(b: float, dump_frac: float) -> list[float]:
+        A, T = me["alpha_in"], me["tao_in"]
+        ema = me.get("ema_price") or (T / A)
+        issuance = (me.get("alpha_in") or 0.0) + (me.get("alpha_issued") or 0.0)
+        k_ema = 1.0 - math.exp(-1.0 / ema_tc_days)
+        traj = []
+        for _ in range(days + 1):
+            spot = T / A
+            traj.append(spot)
+            rp = tw / (tw + issuance) if (tw + issuance) > 0 else 0.0
+            w21 = ema * rp * (1.0 - b)
+            share = w21 / (d_rest + w21)
+            tao_day = share * block_emission * blocks_day
+            cap_alpha_day = rp * alpha_emission * blocks_day
+            alpha_needed = tao_day / spot if spot > 0 else 0.0
+            inj_alpha = min(alpha_needed, cap_alpha_day)
+            inj_tao = inj_alpha * spot if alpha_needed > cap_alpha_day else tao_day
+            buy_tao = max(0.0, tao_day - inj_tao)
+            T += inj_tao
+            A += inj_alpha
+            if buy_tao > 0:                       # chain buys: TAO in, alpha out
+                A = (A * T) / (T + buy_tao)
+                T += buy_tao
+            dump = miner_pool_day * max(0.0, b_now - b) * dump_frac
+            if dump > 0:                          # miner sells: alpha in, TAO out
+                T = (A * T) / (A + dump)
+                A += dump
+            issuance += alpha_out_day + inj_alpha
+            ema += k_ema * (min(T / A, 1.0) - ema)
+        return traj
+
+    burns = [b_now if b is None else b for b in burns]
+    base = simulate(b_now, 0.0)
+    rows = []
+    for b in sorted(set(round(b, 4) for b in burns), reverse=True):
+        for f in dump_fracs:
+            tr = simulate(b, f)
+            rows.append({
+                "b": b, "dump_frac": f,
+                "d30_vs_hold_pct": round((tr[min(30, days)] / base[min(30, days)] - 1) * 100, 2),
+                "d90_vs_hold_pct": round((tr[min(90, days)] / base[min(90, days)] - 1) * 100, 2),
+                "d180_vs_hold_pct": round((tr[days] / base[days] - 1) * 100, 2),
+            })
+    # today's chain-buy threshold: emission above cap_tao opens the price channel
+    spot0 = me["tao_in"] / me["alpha_in"]
+    rp0 = tw / (tw + (me.get("alpha_in") or 0.0) + (me.get("alpha_issued") or 0.0))
+    cap_tao_day = rp0 * alpha_emission * blocks_day * spot0
+    best = max((r for r in rows if r["dump_frac"] == 0.15), key=lambda r: r["d90_vs_hold_pct"],
+               default=None)
+    owner_alpha_day = owner_cut * alpha_out_day
+    return {
+        "table": rows,
+        "inputs": {"b_now": round(b_now, 4), "block_emission_tao": round(block_emission, 6),
+                   "chain_buy_threshold_tao_day": round(cap_tao_day, 2),
+                   "owner_alpha_day": round(owner_alpha_day, 0), "days": days},
+        "summary": (
+            f"Price only moves via CHAIN BUYS, which open once SN21's TAO emission exceeds "
+            f"the injection cap (~{cap_tao_day:.1f} TAO/day, i.e. burn below ~0.5 today) — "
+            f"cuts that stop above that add balanced liquidity (depth, not price). "
+            + (f"Best 90-day price vs holding, at 15% realized dump: {best['d90_vs_hold_pct']:+.1f}% "
+               f"at b={best['b']:.2f} ({best['d180_vs_hold_pct']:+.1f}% at 180d). " if best else "")
+            + f"Owner alpha stays capped at {owner_alpha_day:,.0f}/day at every burn level — the "
+              f"owner gain from cutting burn is the VALUE of that fixed alpha via price."
+        ),
+    }
+
+
 ALL = {
     "S1": s1_old_vs_new,
     "S2": s2_burn_sweep,
     "S3": s3_decay,
     "S4": s4_extraction,
     "S5": s5_dump_safety,
+    "S6": s6_burn_price,
 }
 
 

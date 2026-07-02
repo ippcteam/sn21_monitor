@@ -906,6 +906,10 @@
         <div class="chart-header"><span class="chart-title">S5 · dump safety: net pool TAO/day vs miner sell-fraction</span></div>
         <div class="chart-canvas-wrap"><canvas id="chartLabDump"></canvas></div>
       </div>
+      <div class="chart-card">
+        <div class="chart-header"><span class="chart-title">S6 · alpha price at day 90 vs holding current burn, by burn level</span></div>
+        <div class="chart-canvas-wrap"><canvas id="chartLabPrice"></canvas></div>
+      </div>
     </div>
 
     <div class="section-label">Scenario summaries</div>
@@ -2296,7 +2300,8 @@ function renderLabRun(d) {
   document.getElementById('labScenarios').innerHTML =
     `<div class="table-wrap"><table><thead><tr><th>Scenario</th><th>Read</th></tr></thead><tbody>` +
     [['S1','Old vs new'],['S2','Burn sweep → target b (D-Q)'],['S3','Youth-allowance decay (R-M)'],
-     ['S4','Extraction economics'],['S5','Dump safety / safe step (R-Q)']]
+     ['S4','Extraction economics'],['S5','Dump safety / safe step (R-Q)'],
+     ['S6','Burn → alpha-price trajectory']]
       .map(([k,label]) => {
         const sc = S[k] || {};
         const txt = sc.error ? `<span style="color:var(--red)">${sc.error}</span>` : (sc.summary || '—');
@@ -2384,6 +2389,22 @@ function buildLabCharts(S) {
         label: 'realized TAO', data: t.map(r => r.realized_tao),
         backgroundColor: 'rgba(59,130,246,0.45)', borderColor: '#3b82f6', borderWidth: 1,
       }]},
+      options: opts,
+    });
+  }
+  // S6 burn → price (day-90 vs hold, one line per dump fraction)
+  if (S.S6 && S.S6.table) {
+    const t = S.S6.table;
+    const burns = [...new Set(t.map(r => r.b))].sort((a, b) => b - a);
+    const fracs = [0, 0.15, 0.5];
+    const colors = { 0: '#10b981', 0.15: '#3b82f6', 0.5: '#EF4444' };
+    charts['chartLabPrice'] = new Chart(_labCtx('chartLabPrice'), {
+      type: 'line',
+      data: { labels: burns.map(b => 'b=' + b.toFixed(2)), datasets: fracs.map(f => ({
+        label: 'dump ' + (f * 100) + '%',
+        data: burns.map(b => t.find(r => r.b === b && r.dump_frac === f)?.d90_vs_hold_pct ?? null),
+        borderColor: colors[f], backgroundColor: 'transparent', tension: 0.25, pointRadius: 2,
+      }))},
       options: opts,
     });
   }

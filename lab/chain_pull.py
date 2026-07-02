@@ -134,6 +134,27 @@ def _all_miner_burned(st) -> dict[int, float]:
     return out
 
 
+def _all_excess_tao(st) -> dict[int, float]:
+    """Per-subnet SubnetExcessTao (TAO/block, rao-scaled) — the CHAIN-BUY leg of a
+    subnet's block emission. The coinbase caps liquidity injection at
+    `root_proportion x alpha_emission`; TAO emission above that cap is swapped
+    into alpha ("chain buys", run_coinbase.rs inject_and_maybe_swap) and recorded
+    here, NOT in SubnetTaoInEmission. A subnet's actual per-block TAO emission is
+    therefore `tao_in_emission + excess_tao_emission` — summing only the former
+    misses ~59% of network emission (old/capped subnets) and inflates young
+    uncapped subnets' apparent share ~3x (the former "SN21 over-emits" artifact)."""
+    out: dict[int, float] = {}
+    try:
+        for k, v in st.substrate.query_map("SubtensorModule", "SubnetExcessTao"):
+            nu = int(getattr(k, "value", k))
+            raw = getattr(v, "value", v)
+            if raw is not None:
+                out[nu] = float(raw) / 1e9
+    except Exception as e:  # noqa: BLE001 — never let the excess lookup kill the pull
+        logger.warning("SubnetExcessTao query_map failed (old runtime?): %s", e)
+    return out
+
+
 def _root_stake_tao(network: str = NETWORK) -> float | None:
     """Total root (netuid 0) stake in TAO = T_root, the numerator weight of
     root_prop. Summed from the netuid-0 metagraph, as root_reborn_model.py does.
@@ -203,6 +224,7 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     # Per-subnet economic burn (= Taostats incentive_burn), needed for the
     # renormalised (1 - burn) split across ALL subnets, not just SN21.
     miner_burned = _all_miner_burned(st)
+    excess_tao = _all_excess_tao(st)
 
     subnets = []
     for d in raw:
@@ -227,8 +249,11 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
             "ema_price": moving,             # SubnetMovingPrice (the 'salary')
             "tempo": _int(getattr(d, "tempo", None)),
             "miner_burn": miner_burned.get(nu, 0.0),   # on-chain MinerBurned (=incentive_burn)
-            # chain's actual per-block emission — reproduction-gate ground truth
+            # chain's actual per-block emission — reproduction-gate ground truth.
+            # tao_in_emission is the LIQUIDITY-INJECTION leg only; excess_tao_emission
+            # is the chain-buy leg. Actual total = the sum of both.
             "tao_in_emission": _f(getattr(d, "tao_in_emission", None)),
+            "excess_tao_emission": excess_tao.get(nu, 0.0),
             "alpha_out_emission": _f(getattr(d, "alpha_out_emission", None)),
             "alpha_in_emission": _f(getattr(d, "alpha_in_emission", None)),
         })
