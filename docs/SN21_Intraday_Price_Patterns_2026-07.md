@@ -49,3 +49,32 @@ A real daily rhythm survives a split-half test. This doesn't.
 There is no consistent, exploitable time-of-day movement in SN21 alpha over the last 60 days. The morning-dip perception is an averaging artifact of a few large idiosyncratic move-days (which our attribution work already tracks event-by-event) plus the slow ever-present mechanical drift. Don't time entries/exits by clock hour; keep attribution focused on the event-driven moves (customer/revenue news, whale flows) per `Alpha_Price_Attribution_2026-06.md`.
 
 **Method note for re-runs:** sampler + analysis were one-off scripts against `wss://archive.chain.opentensor.ai:443` (2 pipelined RPCs per sample: `chain_getBlockHash`, then `state_queryStorageAt` for Timestamp.Now / SubnetTAO / SubnetAlphaIn). ~35 min for 60d hourly. Re-run after a few more months if the day-of-week hint is worth confirming.
+
+---
+
+# Addendum: predictable events, their price impact, and planning confidence
+
+**Method:** event study over the same 60-day hourly series. Event timestamps + amounts from taoflute `materialized_news` (472 SN21 events). Impact = log price change from the last pool snapshot before the event to the first snapshot ≥1h/3h after, versus a 400-draw random-time baseline.
+
+## The noise floor (read this first)
+
+Hourly return sd is **~100bp**; daily sd is **~400bp**. The five biggest days carry **39% of total variance** (best: 2026-06-09 +12.7%). Any "plannable" event has to clear that bar — none of the scheduled ones come close.
+
+## Event-by-event
+
+| Event | Schedule | Measured impact | Theory | Plannable? |
+|---|---|---|---|---|
+| **Emission injection drift** | every block | **−3.5bp/day** (median hourly return) | −3.7bp/day from pool flows (+19 α/h injected, −0.05 TAO/h) | **YES — high confidence, but tiny (~−1%/month)** |
+| **House `sno_staking` buys** | ~1.8/day, 08:00–15:00 UTC, median 3.1 TAO (~$1k), 5.4 TAO/day total | −26bp next hour, t=−1.6, **not significant** | +8bp per buy (2·ΔTAO/tao_in on 8.2k pool) | No — 12× below hourly noise |
+| **`sno_alpha_transfer_in_tao`** | paired with buys (43/108 exact same-amount within 10min = buy→distribute) | −22bp, t=−1.7, not significant | ~0 (transfer_stake doesn't touch the pool) | No |
+| **Miner/manual burns** | ~1 per 10 days, episodic | n=6, wildly noisy (−59bp@1h, +287bp@6h, −139bp@24h) | none immediate (burn removes circulating α, not pool α) | No |
+| **Large repo commits** | irregular | ~0bp (t=0.1) | 0 | No |
+| **Day-of-week: Tuesday** | weekly | **+298bp avg, 7/9 up, t=+1.9** | — | Watch-list only (p≈0.07 uncorrected, 9 obs, 7 weekday tests) |
+| **Day-of-week: Fri/Sat** | weekly | −148bp / −113bp, t=−1.4/−0.7 | — | No |
+
+## What this means for planning
+
+1. **The only truly reliable predictable force is the mechanical bleed: ≈ −1%/month** absent demand. House buys theoretically add back ~+0.4%/month (+13bp/day gross). Net structural ≈ −0.6 to −0.7%/month — the level of organic buying needed just to hold price flat. Over this window actual mean drift was +5.8bp/day, i.e. organic demand more than covered it.
+2. **Nothing on the chain schedule is tradeable intraday.** The largest scheduled flow (a 3 TAO house buy) moves the pool ~8bp; hourly noise is ~100bp. To move price a visible 1% in one clip takes a ~41 TAO buy at current 8.2k-TAO depth.
+3. **The plannable events are the ones we create, not the chain's.** 39% of variance sits in 5 news-shaped days, and the June attribution note already showed the Jun 22 customer-announcement alignment. If the goal is planning around price-moving events, the calendar that matters is the announcement calendar (customer/revenue proof posts), with the X Listen view-velocity data as the measuring stick.
+4. **Tuesday strength is the only calendar anomaly worth re-testing** — at ~9 observations it's a hint, not a plan. Re-run the day-of-week table after ~6 months of data (needs ~25+ weeks for the t-stat to mean anything).
