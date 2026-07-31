@@ -174,28 +174,18 @@ def _resolve_names(hotkeys: list[str]) -> dict[str, str | None]:
 
 
 def _connect():
-    import bittensor as bt
+    from chain_compat import fetch_metagraph, get_subtensor
 
-    _configure_chain_ssl()
-    st = bt.Subtensor(network=NETWORK, log_verbose=False)
-    mg = bt.Metagraph(netuid=NETUID, network=NETWORK, sync=True)
+    st = get_subtensor(NETWORK)                 # bittensor 11 client
+    mg = fetch_metagraph(NETUID, network=NETWORK, st=st)
     return st, mg
 
 
 def _owner_uid(st, mg) -> tuple[int | None, str | None, str | None]:
-    """(uid, hotkey, coldkey) of the subnet-owner hotkey, the burn target."""
-    try:
-        r = st.substrate.query("SubtensorModule", "SubnetOwnerHotkey", [NETUID])
-        owner_hk = r.value if hasattr(r, "value") else r
-    except Exception:
-        logger.exception("SubnetOwnerHotkey query failed")
-        owner_hk = None
-    owner_ck = None
-    try:
-        rc = st.substrate.query("SubtensorModule", "SubnetOwner", [NETUID])
-        owner_ck = rc.value if hasattr(rc, "value") else rc
-    except Exception:
-        owner_ck = None
+    """(uid, hotkey, coldkey) of the subnet-owner hotkey, the burn target.
+    The v11 metagraph carries both owner keys directly."""
+    owner_hk = mg.owner_hotkey or None
+    owner_ck = mg.owner_coldkey or None
     uid = None
     if owner_hk:
         for i, hk in enumerate(mg.hotkeys):
@@ -212,7 +202,7 @@ def run_scan() -> dict[str, Any]:
     """Read all validator weight vectors from chain and analyse copy/burn state."""
     with _scan_lock:
         st, mg = _connect()
-        block = int(mg.block.item())
+        block = int(mg.block)
         n = len(mg.uids)
 
         owner_uid, owner_hk, owner_ck = _owner_uid(st, mg)
@@ -228,13 +218,16 @@ def run_scan() -> dict[str, Any]:
                     our_coldkey = mg.coldkeys[i]
                     break
 
-        # Raw weight vectors, normalised to sum 1.
-        raw = st.weights(netuid=NETUID)  # [(uid, [(target, w_u16), ...]), ...]
+        # Raw weight vectors, normalised to sum 1. bittensor 11 returns
+        # {setter_uid: {target_uid: normalized_float}} (already 0..1 floats;
+        # renormalise anyway so the invariant never depends on SDK behavior).
+        raw = st.weights.weights(NETUID)
         vectors: dict[int, list[float]] = {}
         scored_counts: dict[int, int] = {}
-        for uid, pairs in raw:
+        for uid, pairs in (raw or {}).items():
             v = [0.0] * n
-            for t, w in pairs:
+            for t, w in dict(pairs).items():
+                t = int(t)
                 if 0 <= t < n:
                     v[t] = float(w)
             s = sum(v)
@@ -530,14 +523,13 @@ def our_validator_wallets(hotkey: str | None = None) -> dict[str, Any]:
     onchain_total = None
     cross_ok = None
     try:
-        _configure_chain_ssl()
-        import bittensor as bt
+        from chain_compat import bits, substrate
 
-        st = bt.Subtensor(network=NETWORK, log_verbose=False)
-        r = st.substrate.query("SubtensorModule", "TotalHotkeyAlpha", [hk, NETUID])
-        raw = r.value if hasattr(r, "value") else r
-        onchain_total = round(float(raw) / RAO_PER_TAO, 6)
-        cross_ok = abs(onchain_total - total) <= max(1.0, 0.001 * onchain_total)
+        with substrate() as sub:
+            raw = bits(sub.query("SubtensorModule", "TotalHotkeyAlpha", [hk, NETUID]))
+        onchain_total = round(raw / RAO_PER_TAO, 6) if raw is not None else None
+        if onchain_total is not None:
+            cross_ok = abs(onchain_total - total) <= max(1.0, 0.001 * onchain_total)
     except Exception:
         logger.exception("TotalHotkeyAlpha cross-check failed")
 
