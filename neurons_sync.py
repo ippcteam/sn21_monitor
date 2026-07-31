@@ -202,6 +202,27 @@ def _normalise_row(
     }
 
 
+def burn_summary(neurons: list[dict[str, Any]]) -> dict[str, Any]:
+    """Subnet-wide miner-burn ratio from a snapshot (1.0 = 100% burn).
+
+    Aggregate over ALL uids — never over the non-permit `miners` split. SN21's
+    burn sink is the owner hotkey (UID 135), which carries a validator permit
+    and is the only uid Taostats reports a non-null `daily_burned_alpha` for;
+    every real miner reports null. Summing over miners alone therefore pinned
+    the rate at 0.0 while the chain was burning 45% (MinerBurned(21) = 0.4508
+    == Taostats incentive_burn, 2026-07-31). Whether the sink holds a permit is
+    a weight-routing detail that must not change what "burn" measures.
+    """
+    gross = sum((n.get("daily_mining_alpha") or 0.0) for n in neurons)
+    burned = sum((n.get("daily_burned_alpha") or 0.0) for n in neurons)
+    return {
+        "rate": round(burned / gross, 6) if gross > 0 else None,
+        "total_mining_alpha_gross": round(gross, 9),
+        "total_mining_alpha_burned": round(burned, 9),
+        "total_mining_alpha_net": round(gross - burned, 9),
+    }
+
+
 def fetch_neurons() -> dict[str, Any]:
     """
     Pull fresh metagraph snapshot (cached 60 s), classify into validators and
@@ -258,14 +279,6 @@ def fetch_neurons() -> dict[str, Any]:
     house_validators = [v for v in validators if v.get("is_house")]
     house_miners = [m for m in miners if m.get("is_house")]
 
-    # Subnet-wide burn ratio from the latest snapshot (1.0 = 100% burn).
-    total_mining_alpha = sum((m.get("daily_mining_alpha") or 0.0) for m in miners)
-    total_burned_alpha = sum((m.get("daily_burned_alpha") or 0.0) for m in miners)
-    burn_rate = (
-        round(total_burned_alpha / total_mining_alpha, 6)
-        if total_mining_alpha > 0 else None
-    )
-
     payload = {
         "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
         "block_number": block_number,
@@ -295,12 +308,7 @@ def fetch_neurons() -> dict[str, Any]:
             "house_validators": sum(1 for v in house_validators if v.get("submitting_in_window")),
             "house_miners": sum(1 for m in house_miners if m.get("submitting_in_window")),
         },
-        "burn": {
-            "rate": burn_rate,
-            "total_mining_alpha_gross": round(total_mining_alpha, 9),
-            "total_mining_alpha_burned": round(total_burned_alpha, 9),
-            "total_mining_alpha_net": round(total_mining_alpha - total_burned_alpha, 9),
-        },
+        "burn": burn_summary(normalised),
         "validators": validators,
         "miners": miners,
     }
