@@ -204,7 +204,11 @@ def snapshot_from_metagraph(mg, date_str: str, tao_usd: float | None = None) -> 
         "active_uids": [
             {
                 "uid": uid,
-                "hotkey": str(hotkeys[i])[:16] + "...",
+                # Full ss58 (was truncated to 16 chars + "..."): the dashboard
+                # needs the whole address to link the UID out to taostats, and
+                # truncates for display itself. Entries written before
+                # 2026-07-31 keep their truncated value and simply don't link.
+                "hotkey": str(hotkeys[i]),
                 "emission": round(float(emissions[i]), 8),
                 "dividend": round(float(dividends[i]), 6),
                 "incentive": round(float(incentives[i]), 6),
