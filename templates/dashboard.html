@@ -400,6 +400,24 @@
     .alert-drop  { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); color: var(--red); }
     .alert-surge { background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); color: var(--green); }
 
+    /* ── taostats deep links ── */
+    .ts-link {
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(148,163,184,0.45);
+    }
+    .ts-link:hover { color: var(--blue-lt); border-bottom-color: var(--blue-lt); }
+    .ts-wallet {
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      text-transform: uppercase;
+      border-bottom: none;
+      white-space: nowrap;
+    }
+    .ts-wallet:hover { color: var(--blue-lt); }
+
     /* ── House labels ── */
     .house-chip {
       display: inline-flex; align-items: center; gap: 0.25rem;
@@ -976,6 +994,46 @@ function fmtDelta(pct) {
   return `<span class="card-delta delta-flat">— 0%</span>`;
 }
 
+/* ── taostats deep links ────────────────────────────────────────
+   Every ss58 we render links out to taostats. /account/<ss58> is the route to
+   use: it is the only one that serves per-address metadata (verified live —
+   /hotkey/<ss58> returns a generic shell) and it is the page carrying the
+   balance. A wallet's balance lives on the COLDKEY, so rows that identify a
+   neuron by hotkey also get a separate "wallet ↗" link to its coldkey — that
+   is the click that answers "what is this miner holding?".
+   keyText() falls back to plain text for anything that is not a full ss58, so
+   truncated historical values (e.g. pre-2026-07-31 daily-log hotkeys, stored
+   as "5Gui…" + "...") degrade to what they render today instead of 404ing. */
+const TAOSTATS_ACCOUNT_URL = 'https://taostats.io/account/';
+const SS58_RE = /^5[1-9A-HJ-NP-Za-km-z]{46,47}$/;
+
+function isSs58(v) {
+  return typeof v === 'string' && SS58_RE.test(v);
+}
+
+function shortKey(ss58, head = 8, tail = 4) {
+  if (!ss58) return '';
+  return ss58.length > head + tail + 1 ? `${ss58.slice(0, head)}…${ss58.slice(-tail)}` : ss58;
+}
+
+/** Address rendered as a taostats link; plain text when not a usable ss58. */
+function keyText(ss58, label, kind = '') {
+  if (!isSs58(ss58)) return label || ss58 || '—';
+  const text = label || shortKey(ss58);
+  const what = kind ? `${kind} ` : '';
+  return `<a class="ts-link" href="${TAOSTATS_ACCOUNT_URL}${encodeURIComponent(ss58)}"`
+    + ` target="_blank" rel="noopener noreferrer"`
+    + ` title="${what}${ss58} — open on taostats (balance, stake, transfers)">${text}</a>`;
+}
+
+/** Trailing "wallet ↗" link to the coldkey that holds the balance. */
+function walletLink(coldkey) {
+  if (!isSs58(coldkey)) return '';
+  return ` <a class="ts-link ts-wallet" href="${TAOSTATS_ACCOUNT_URL}${encodeURIComponent(coldkey)}"`
+    + ` target="_blank" rel="noopener noreferrer"`
+    + ` title="Wallet (coldkey) ${coldkey} — balance on taostats">wallet ↗</a>`;
+}
+
 /* ── House weekly loader ────────────────────────────────────── */
 function fmtAlphaSafe(n, dp = 4) {
   if (n === null || n === undefined) return '—';
@@ -1104,7 +1162,7 @@ async function loadHouseMiners() {
     const rows = (d.miners || []).map(m => `
       <tr>
         <td>${m.uid}</td>
-        <td title="${m.hotkey}">${m.hotkey_short || (m.hotkey || '').slice(0,10)+'…'}</td>
+        <td>${keyText(m.hotkey, m.hotkey_short || shortKey(m.hotkey), 'Hotkey')}${walletLink(m.coldkey)}</td>
         <td style="text-align:right">${fmtAlphaSafe(m.holding_alpha, 3)}</td>
         <td style="text-align:right;color:var(--muted)">${fmtUsd(m.holding_usd)}</td>
         <td style="text-align:right">${fmtAlphaSafe(m.earned_28d_alpha, 3)}</td>
@@ -1338,7 +1396,7 @@ async function loadUids() {
               <td class="mono">${u.incentive.toFixed(6)}</td>
               <td class="mono">${u.dividend.toFixed(6)}</td>
               <td class="mono">${u.stake.toFixed(4)}</td>
-              <td class="mono" style="color:var(--muted)">${u.hotkey}</td>
+              <td class="mono" style="color:var(--muted)">${keyText(u.hotkey, null, 'Hotkey')}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -1686,7 +1744,8 @@ async function loadValidatorsTab() {
       const oursTag = v.is_ours ? ' <span class="house-chip">OURS</span>' : '';
       const ownerTag = v.is_owner_uid ? ' <span class="house-chip" style="background:rgba(139,92,246,0.12);border-color:rgba(139,92,246,0.4);color:#A78BFA">OWNER</span>' : '';
       const houseChip = (v.is_house && !v.is_ours) ? ' <span class="house-chip">HOUSE</span>' : '';
-      const name = v.name || `<span style="color:var(--muted)">${v.hotkey_short || '—'}</span>`;
+      const nameText = v.name || `<span style="color:var(--muted)">${v.hotkey_short || '—'}</span>`;
+      const name = keyText(v.hotkey, nameText, 'Validator hotkey') + walletLink(v.coldkey);
       const top = (v.top_target_uid != null)
         ? `${v.top_target_uid} <span style="color:var(--muted)">${((v.top_target_share||0)*100).toFixed(0)}%</span>` : '—';
       const cos = v.cos_to_consensus != null ? v.cos_to_consensus.toFixed(3) : '—';
@@ -1734,7 +1793,7 @@ async function loadValidatorWallets() {
     const rows = (d.wallets || []).map((w, i) => `
       <tr>
         <td class="uid">${i+1}</td>
-        <td class="mono" title="${w.coldkey || ''}">${w.coldkey_short || '—'}</td>
+        <td class="mono">${keyText(w.coldkey, w.coldkey_short, 'Wallet (coldkey)')}</td>
         <td>${w.name || '<span style="color:var(--muted)">—</span>'}${w.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}</td>
         <td class="mono">${fmtAlpha(w.alpha, 4)}</td>
         <td class="mono">${fmtAlpha(w.as_tao, 4)}</td>
@@ -2801,7 +2860,7 @@ function renderValidatorsTable(rows, w) {
               <td class="mono">${fmtPct((v.dividends || 0) * 100, 2)}%</td>
               <td class="mono" title="block ${v.last_update_block}">${fmtBlocksAgo(v.updated_blocks_ago)}</td>
               <td class="mono">${submittingBadge(v.submitting_in_window, relevant)}</td>
-              <td class="mono" style="color:var(--muted)" title="${v.hotkey || ''}">${v.hotkey_short || ''}</td>
+              <td class="mono" style="color:var(--muted)">${keyText(v.hotkey, v.hotkey_short, 'Hotkey')}${walletLink(v.coldkey)}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -2847,7 +2906,7 @@ function renderMinersTable(rows, w) {
               <td class="mono" title="block ${m.last_update_block}">${fmtBlocksAgo(m.updated_blocks_ago)}</td>
               <td class="mono">${submittingBadge(m.submitting_in_window, relevant)}</td>
               <td class="mono" style="color:var(--muted)">${m.axon_ip ? m.axon_ip + ':' + m.axon_port : '—'}</td>
-              <td class="mono" style="color:var(--muted)" title="${m.hotkey || ''}">${m.hotkey_short || ''}</td>
+              <td class="mono" style="color:var(--muted)">${keyText(m.hotkey, m.hotkey_short, 'Hotkey')}${walletLink(m.coldkey)}</td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -2876,8 +2935,8 @@ function renderMoverMemberRow(m) {
     : (m.alpha_delta > 0 ? '<span style="color:var(--green)">BOUGHT</span>'
        : '<span style="color:var(--red)">SOLD</span>');
   return `<tr>
-    <td class="mono" style="color:var(--text-dim)" title="${m.hotkey || ''}">${m.hotkey_name || (m.hotkey || '').slice(0,12) + '…'}</td>
-    <td class="mono" style="color:var(--muted)" title="${m.coldkey || ''}">${(m.coldkey || '').slice(0,10)}…</td>
+    <td class="mono" style="color:var(--text-dim)">${keyText(m.hotkey, m.hotkey_name || shortKey(m.hotkey, 12, 4), 'Hotkey')}</td>
+    <td class="mono" style="color:var(--muted)">${keyText(m.coldkey, shortKey(m.coldkey, 10, 4), 'Wallet (coldkey)')}</td>
     <td class="mono">${fmtAlpha(m.alpha_now, 4)}</td>
     <td class="mono" style="color:var(--muted)">${fmtAlpha(m.alpha_prev, 4)}</td>
     <td class="mono" style="color:${dirColor}">${m.alpha_delta >= 0 ? '+' : ''}${fmtAlpha(m.alpha_delta, 4)}</td>
@@ -2971,7 +3030,7 @@ async function loadMovementTab() {
         value: fmtInt((our.snapshots || []).length),
         unit: '',
         delta: '',
-        sub: 'Coldkey ' + (our.coldkey || '').slice(0, 10) + '…',
+        sub: 'Coldkey ' + keyText(our.coldkey, shortKey(our.coldkey, 10, 4), 'Wallet (coldkey)'),
         accent: '#6366f1',
       },
     ];
