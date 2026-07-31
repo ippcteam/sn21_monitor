@@ -1,13 +1,16 @@
-# bittensor 8.5.x pins fastapi~=0.110; use 9.x for current finney runtime decode compatibility
 fastapi==0.110.3
 uvicorn[standard]==0.30.6
 jinja2==3.1.4
 python-multipart==0.0.12
 apscheduler==3.10.4
-bittensor==9.12.2
-# Pin to 1.x: bittensor 9.12.2 imports ScaleObj which 2.x dropped, and 2.x
-# also pulls cyscale which collides with scalecodec namespace. 1.5.6+ is the
-# floor that bittensor accepts.
+# 11.0.0 = the spec-430 runtime SDK rewrite (one Rust core, namespace reads).
+# REQUIRED since the finney v430-v432 deploys (2026-07-13..16): 9.x cannot
+# decode the typed runtime (all_subnets/metagraph fail). All chain modules go
+# through chain_compat.py — do not use 9.x-era bt APIs directly.
+bittensor==11.0.0
+# Used DIRECTLY (not via bittensor) for raw storage reads in chain_compat,
+# conviction_watch and lab/chain_pull. Keep 1.x: 2.x pulls cyscale which
+# collides with the scalecodec namespace.
 async-substrate-interface>=1.5.6,<2.0.0
 requests==2.32.3
 certifi>=2024.0.0

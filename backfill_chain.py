@@ -26,9 +26,7 @@ import requests
 
 from collector import (
     NETUID,
-    _configure_chain_ssl,
     _HTTP_HEADERS,
-    _resolve_scalecodec_conflict,
     get_tao_price_usd,
     load_json,
     migrate_and_rebuild_from_logs,
@@ -44,23 +42,26 @@ ARCHIVE_ENV = "SUBTENSOR_ARCHIVE_NETWORK"
 DEFAULT_ARCHIVE = "archive"
 
 
-def _ts_ms_subtensor(subtensor, block: int) -> int:
-    bh = subtensor.get_block_hash(block)
-    raw = subtensor.substrate.query("Timestamp", "Now", block_hash=bh)
-    v = getattr(raw, "value", raw)
+def _ts_ms_subtensor(sub, block: int) -> int:
+    """Chain timestamp (ms) at a block, via a raw substrate connection."""
+    from chain_compat import bits
+
+    bh = sub.get_block_hash(block)
+    v = bits(sub.query("Timestamp", "Now", [], block_hash=bh))
     return int(v)
 
 
-def block_at_or_before_eod_utc(subtensor, day: date) -> int:
-    """Largest block whose chain timestamp is <= end of `day` UTC."""
+def block_at_or_before_eod_utc(sub, day: date) -> int:
+    """Largest block whose chain timestamp is <= end of `day` UTC.
+    `sub` is a raw substrate connection (chain_compat.substrate-style)."""
     end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc)
     target_ms = int(end.timestamp() * 1000)
-    lo, hi = 0, subtensor.get_current_block()
+    lo, hi = 0, int(sub.get_block_number(sub.get_chain_head()))
     best = 0
     while lo <= hi:
         mid = (lo + hi) // 2
         try:
-            ts = _ts_ms_subtensor(subtensor, mid)
+            ts = _ts_ms_subtensor(sub, mid)
         except Exception:
             hi = mid - 1
             continue
@@ -125,9 +126,14 @@ def run_chain_backfill(
     progress: Callable[[str], None] | None = None,
     sleep_s: float = 0.35,
 ) -> dict:
-    _configure_chain_ssl()
-    _resolve_scalecodec_conflict()
-    import bittensor as bt
+    # Ported to bittensor 11 + raw substrate (2026-07-21): block search runs on
+    # a raw archive connection; historical metagraphs come from the v11
+    # snapshot API via chain_compat.fetch_metagraph(block=...).
+    from async_substrate_interface.sync_substrate import SubstrateInterface
+
+    from chain_compat import configure_chain_ssl, fetch_metagraph, get_subtensor
+
+    configure_chain_ssl()
 
     start = start or OWNERSHIP_START
     end = end or date.today()
@@ -143,7 +149,11 @@ def run_chain_backfill(
     net = os.environ.get(ARCHIVE_ENV, DEFAULT_ARCHIVE)
     notify(f"Subtensor {net!r} (archive) — backfill {start} .. {end}")
 
-    st = bt.Subtensor(network=net, log_verbose=False)
+    archive_url = os.environ.get(
+        "SUBTENSOR_ARCHIVE_URL", "wss://archive.chain.opentensor.ai:443"
+    )
+    sub = SubstrateInterface(archive_url)
+    st = get_subtensor(net)
     notify("Fetching TAO/USD history (CoinGecko)")
     tao_by_day = fetch_tao_usd_by_day(start, end)
 
@@ -153,8 +163,13 @@ def run_chain_backfill(
     max_attempts = int(os.environ.get("BACKFILL_RETRIES_PER_DAY", "5"))
 
     def fresh_subtensor():
-        nonlocal st
-        st = bt.Subtensor(network=net, log_verbose=False)
+        nonlocal st, sub
+        try:
+            sub.close()
+        except Exception:
+            pass
+        sub = SubstrateInterface(archive_url)
+        st = get_subtensor(net)
 
     try:
         while cur <= end:
@@ -167,15 +182,8 @@ def run_chain_backfill(
                         notify(f"{ds} retry {attempt + 1}/{max_attempts} (reconnecting…)")
                         time.sleep(min(8 * attempt, 45))
                         fresh_subtensor()
-                    blk = block_at_or_before_eod_utc(st, cur)
-                    mg = bt.Metagraph(
-                        netuid=NETUID,
-                        network=net,
-                        lite=True,
-                        sync=False,
-                        subtensor=st,
-                    )
-                    mg.sync(block=blk, lite=True, subtensor=st)
+                    blk = block_at_or_before_eod_utc(sub, cur)
+                    mg = fetch_metagraph(NETUID, network=net, block=blk, st=st)
                     snap = snapshot_from_metagraph(mg, ds, tao_usd=tao_usd)
                     line = f"{ds} block={blk} owner_α={snap['subnet']['owner_share_alpha']}"
                     notify(line)

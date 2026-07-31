@@ -150,37 +150,40 @@ def run_sync() -> dict[str, Any]:
 
 
 def _run_sync_locked() -> dict[str, Any]:
-    _configure_chain_ssl()
-    import bittensor as bt
+    # Ported to the spec-430 runtime (2026-07-21): bittensor 9.x's all_subnets()
+    # can't decode the typed runtime, and bittensor 11 has no pool-reserve read —
+    # pull reserves straight from storage (SubnetTAO / SubnetAlphaIn query_maps)
+    # and names via the v11 subnet_names read (auxiliary; failure tolerated).
+    from chain_compat import get_subtensor, qmap, substrate
 
-    logger.info("Market scan: pulling all subnets from %s …", NETWORK)
-    st = bt.Subtensor(network=NETWORK, log_verbose=False)
-    raw = st.all_subnets()
+    logger.info("Market scan: pulling all subnet pools from %s …", NETWORK)
+    with substrate() as sub:
+        block = int(sub.get_block_number(sub.get_chain_head()))
+        tao_map = qmap(sub, "SubnetTAO", 1e9)
+        alpha_map = qmap(sub, "SubnetAlphaIn", 1e9)
+
+    names: dict[int, str] = {}
     try:
-        block = int(st.get_current_block())
-    except Exception:
-        block = None
+        names = {int(k): str(v) for k, v in (get_subtensor(NETWORK).subnets.subnet_names() or {}).items()}
+    except Exception as e:  # noqa: BLE001 — names are cosmetic
+        logger.warning("subnet_names read failed: %s", e)
 
     tao_usd = get_tao_price_usd()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # ── Per-subnet price from reserves ───────────────────────────────────────
     rows: list[dict[str, Any]] = []
-    for d in raw or []:
-        netuid = getattr(d, "netuid", None)
-        if netuid is None:
-            continue
-        netuid = int(netuid)
+    for netuid in sorted(set(tao_map) | set(alpha_map)):
         if netuid == 0:  # root has no alpha pool
             continue
-        tao_in = _to_float(getattr(d, "tao_in", None))
-        alpha_in = _to_float(getattr(d, "alpha_in", None))
+        tao_in = tao_map.get(netuid)
+        alpha_in = alpha_map.get(netuid)
         price_tao = (tao_in / alpha_in) if (tao_in and alpha_in and alpha_in > 0) else None
         if price_tao is None or price_tao <= 0:
             continue
         rows.append({
             "netuid": netuid,
-            "name": _subnet_name(d),
+            "name": names.get(netuid),
             "alpha_price_tao": round(price_tao, 8),
             "alpha_price_usd": round(price_tao * tao_usd, 8) if tao_usd else None,
             "tao_in": round(tao_in, 4),

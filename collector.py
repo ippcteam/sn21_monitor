@@ -40,37 +40,14 @@ _SCALECODEC_FIXED = False
 
 
 def _resolve_scalecodec_conflict() -> None:
-    """
-    bittensor 9.x pulls `scalecodec` directly while async-substrate-interface
-    2.x pulls `cyscale`. They share the `scalecodec` Python namespace and
-    bittensor's import-time guard refuses when both are present. The required
-    fix (per the guard's own error message) is to uninstall both and then
-    force-reinstall cyscale — cyscale's install hooks then register itself
-    as the `scalecodec` namespace. Run that sequence once per process.
-    """
-    global _SCALECODEC_FIXED
-    if _SCALECODEC_FIXED:
-        return
+    """OBSOLETE no-op (kept for import compatibility).
 
-    import importlib
-    import subprocess
-    import sys as _sys
-
-    try:
-        subprocess.run(
-            [_sys.executable, "-m", "pip", "uninstall", "-y", "scalecodec", "cyscale"],
-            check=False, capture_output=True, timeout=180,
-        )
-        subprocess.run(
-            [_sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", "cyscale"],
-            check=False, capture_output=True, timeout=180,
-        )
-        importlib.invalidate_caches()
-        logger.info("Reinstalled cyscale to resolve scalecodec namespace conflict")
-    except Exception as e:
-        logger.warning("Could not resolve scalecodec/cyscale conflict: %s", e)
-    finally:
-        _SCALECODEC_FIXED = True
+    Under bittensor 9.x this ran a runtime pip uninstall/reinstall dance to
+    resolve the scalecodec/cyscale namespace collision. bittensor 11 (the
+    spec-430 SDK rewrite, one Rust core) does not import scalecodec at all,
+    and running pip at runtime against the v11 dependency tree could corrupt
+    the env — so this must stay inert."""
+    return
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -241,12 +218,10 @@ def snapshot_from_metagraph(mg, date_str: str, tao_usd: float | None = None) -> 
 
 def get_snapshot() -> dict:
     """Pull live SN21 metagraph data and return structured snapshot."""
-    _configure_chain_ssl()
-    _resolve_scalecodec_conflict()
-    import bittensor as bt
+    from chain_compat import fetch_metagraph
 
     logger.info("Syncing SN21 metagraph...")
-    mg = bt.Metagraph(netuid=NETUID, network=NETWORK, sync=True)
+    mg = fetch_metagraph(NETUID, network=NETWORK)
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return snapshot_from_metagraph(mg, date_str, tao_usd=None)
 
