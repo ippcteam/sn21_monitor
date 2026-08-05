@@ -60,6 +60,15 @@ from stake_watch import (
     STAKE_WATCH_STORE,
     run_stake_watch,
 )
+from conviction_watch import (
+    CONVICTION_WATCH_STORE,
+    run_conviction_watch,
+)
+from dereg_watch import (
+    DEREG_WATCH_HISTORY,
+    DEREG_WATCH_STORE,
+    run_dereg_watch,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -331,6 +340,45 @@ async def api_taostats_sync(_=Depends(require_auth)):
         return sync_owner_transfers()
     except Exception as e:
         logger.exception("Taostats sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/conviction/watch")
+async def api_conviction_watch(_=Depends(require_auth)):
+    """Last conviction-tripwire snapshot (any third-party HotkeyLock on SN21?)."""
+    return load_json(CONVICTION_WATCH_STORE, {})
+
+
+@app.post("/api/conviction/watch")
+async def api_conviction_watch_run(_=Depends(require_auth), notify: bool = False):
+    """Run the conviction tripwire now. notify=1 also fires Telegram on escalation."""
+    try:
+        return run_conviction_watch(notify=notify)
+    except Exception as e:
+        logger.exception("Conviction watch failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/dereg/watch")
+async def api_dereg_watch(_=Depends(require_auth)):
+    """Last dereg-tripwire snapshot: how many subnets sit below SN21's EMA in the
+    prune queue, the live floor, and the chain-simulated cost to rebuild the buffer."""
+    return load_json(DEREG_WATCH_STORE, {})
+
+
+@app.get("/api/dereg/watch/history")
+async def api_dereg_watch_history(_=Depends(require_auth)):
+    """Buffer-over-time — the erosion signal a single snapshot cannot show."""
+    return load_json(DEREG_WATCH_HISTORY, [])
+
+
+@app.post("/api/dereg/watch")
+async def api_dereg_watch_run(_=Depends(require_auth), notify: bool = False):
+    """Run the dereg tripwire now. notify=1 also fires Telegram on escalation."""
+    try:
+        return run_dereg_watch(notify=notify)
+    except Exception as e:
+        logger.exception("Dereg watch failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1031,6 +1079,20 @@ def scheduled_stake_watch():
         logger.exception("Scheduled stake watch failed")
 
 
+def scheduled_conviction_watch():
+    try:
+        run_conviction_watch(notify=True)
+    except Exception:
+        logger.exception("Scheduled conviction watch failed")
+
+
+def scheduled_dereg_watch():
+    try:
+        run_dereg_watch(notify=True)
+    except Exception:
+        logger.exception("Scheduled dereg watch failed")
+
+
 def scheduled_movers_capture():
     try:
         movers_capture()
@@ -1190,6 +1252,21 @@ scheduler.add_job(
     scheduled_stake_watch,
     CronTrigger(hour=7, minute=30),
     id="daily_stake_watch",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_conviction_watch,
+    CronTrigger(hour=7, minute=45),
+    id="daily_conviction_watch",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_dereg_watch,
+    # Every 2 days. day="*/2" is calendar-anchored (1st, 3rd, 5th …) on purpose:
+    # IntervalTrigger(days=2) would restart its clock on every Render deploy and
+    # silently drift. Cost of the anchor is one 1-day gap at a month boundary.
+    CronTrigger(day="*/2", hour=7, minute=50),
+    id="dereg_watch_2d",
     replace_existing=True,
 )
 scheduler.add_job(

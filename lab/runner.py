@@ -28,7 +28,7 @@ from .chain_pull import pull_chain_state, sn21
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VERSION = "root_reborn_v346_421"
+DEFAULT_VERSION = M.LIVE_VERSION   # the verified-live finney mechanism
 DEFAULT_TOLERANCE = 0.15   # 15% relative error on the reproduction gate
 
 
@@ -111,11 +111,25 @@ def _network_reproduction(state: dict, mech, tolerance: float):
 
 
 def reproduction_gate(state: dict, tolerance: float = DEFAULT_TOLERANCE) -> dict:
-    inc = M.get("incumbent")
-    modeled = M.emission_share(inc, state)          # SN21-specific
+    live = M.get(M.LIVE_VERSION)
+    modeled = M.emission_share(live, state)          # SN21-specific
     actual = actual_sn21_share(state)
     sn21_err = abs(modeled - actual) / actual if (actual and actual > 0) else None
-    median, within, n = _network_reproduction(state, inc, tolerance)
+    median, within, n = _network_reproduction(state, live, tolerance)
+
+    # Regression detector (the inverse of the old spec-425 activation detector,
+    # which fired 2026-07-20 when the v430-432 deploys made price×(1−b) fit the
+    # chain best): also fit the SUPERSEDED three-switch formula. If it ever fits
+    # better again, the coinbase changed under us — re-read the source before
+    # trusting any magnitudes.
+    old_median = old_fits_better = None
+    try:
+        old = M.get("incumbent")
+        old_median, _, _ = _network_reproduction(state, old, tolerance)
+        if old_median is not None and median is not None:
+            old_fits_better = old_median < median
+    except KeyError:
+        pass
 
     # Gate on the NETWORK-WIDE median (structural validity), not SN21 alone. SN21's
     # own error is reported as a caveat: when SN21 sits mid burn-transition its
@@ -133,8 +147,14 @@ def reproduction_gate(state: dict, tolerance: float = DEFAULT_TOLERANCE) -> dict
     else:
         note = (f"Formula does NOT reproduce the chain (median rel.err {median}) — "
                 "structural error; treat all magnitudes as directional.")
+    if old_fits_better:
+        note += (" ⚠ REGRESSION DETECTOR: the superseded three-switch formula fits "
+                 f"the chain BETTER (median {old_median:.3f} vs {median:.3f}) — the "
+                 "coinbase has changed again; re-read the source before acting.")
     return {
-        "mechanism": "incumbent",
+        "old_formula_median_rel_err": round(old_median, 4) if old_median is not None else None,
+        "old_formula_fits_better": old_fits_better,
+        "mechanism": M.LIVE_VERSION,
         "modeled_share_pct": round(modeled * 100, 6),
         "actual_share_pct": round(actual * 100, 6) if actual else None,
         "relative_error": round(sn21_err, 4) if sn21_err is not None else None,
@@ -229,12 +249,16 @@ def main(argv=None):
           f"{g['network_within_tol']} subnets within tol {g['tolerance']})")
     print(f"  SN21: modeled {g['modeled_share_pct']}% vs actual {g['actual_share_pct']}% "
           f"(rel.err {g['relative_error']}, {'within' if g['sn21_passed'] else 'OUTSIDE'} tol)")
+    if g.get("old_formula_median_rel_err") is not None:
+        print(f"  regression detector: superseded three-switch median rel.err "
+              f"{g['old_formula_median_rel_err']} — "
+              f"{'⚠ OLD FORMULA FITS BETTER' if g.get('old_formula_fits_better') else 'live formula fits best (expected)'}")
     print(f"  {g['note']}")
     print(f"  trusted = {rec['trusted']}")
     eb = rec.get("effective_burn") or {}
     if eb.get("effective_burn") is not None:
         print(f"  SN21 burn: nominal {eb['nominal_burn']} vs effective {eb['effective_burn']} — {eb['note']}")
-    for key in ("S1", "S2", "S3", "S4", "S5", "S6"):
+    for key in ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"):
         sc = rec["scenarios"].get(key, {})
         summ = sc.get("summary") or sc.get("error") or "—"
         print(f"\n[{key}] {summ}")

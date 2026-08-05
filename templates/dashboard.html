@@ -870,7 +870,7 @@
       Emission Lab · model proposed Bittensor mechanisms vs live SN21 state
       <span id="labMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
       <select id="labMechanism" style="margin-left:auto;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.3rem 0.5rem;font-family:inherit;font-size:0.7rem"></select>
-      <button class="btn-sm primary" onclick="triggerLabRun()" title="Pull live chain state, run the reproduction gate + scenarios S1–S5 (~30–60s)">Run lab (~45s)</button>
+      <button class="btn-sm primary" onclick="triggerLabRun()" title="Pull live chain state, run the reproduction gate + scenarios S1–S7 (~30–60s)">Run lab (~45s)</button>
     </div>
 
     <div class="section-label">Change pipeline · where each mechanism lives → what we do about it</div>
@@ -2261,7 +2261,7 @@ async function loadLabTab() {
     const d = await r.json();
     if (d.error) {
       document.getElementById('labCards').innerHTML =
-        `<div class="no-data"><strong>${d.error}</strong><span>Pulls live chain state, runs the reproduction gate and scenarios S1–S5. <button class="btn-sm" onclick="triggerLabRun()">Run lab</button></span></div>`;
+        `<div class="no-data"><strong>${d.error}</strong><span>Pulls live chain state, runs the reproduction gate and scenarios S1–S7. <button class="btn-sm" onclick="triggerLabRun()">Run lab</button></span></div>`;
       document.getElementById('labGateBanner').className = 'alert-banner';
       return;
     }
@@ -2301,7 +2301,8 @@ function renderLabRun(d) {
     `<div class="table-wrap"><table><thead><tr><th>Scenario</th><th>Read</th></tr></thead><tbody>` +
     [['S1','Old vs new'],['S2','Burn sweep → target b (D-Q)'],['S3','Youth-allowance decay (R-M)'],
      ['S4','Extraction economics'],['S5','Dump safety / safe step (R-Q)'],
-     ['S6','Burn → alpha-price trajectory']]
+     ['S6','Burn → alpha-price trajectory'],
+     ['S7','Burn cut × miner stake + retention policy']]
       .map(([k,label]) => {
         const sc = S[k] || {};
         const txt = sc.error ? `<span style="color:var(--red)">${sc.error}</span>` : (sc.summary || '—');

@@ -39,9 +39,43 @@ logger = logging.getLogger(__name__)
 NETUID_SN21 = 21
 U64_MAX = 2 ** 64                       # TaoWeight normalisation
 U16_MAX = 65535                         # SubnetOwnerCut normalisation
+U64F64_SCALE = 2 ** 64                  # v440 gate hyperparams (q, h, theta)
 SUBNET_DAILY_STORE = DATA_DIR / "subnet_daily.json"  # Taostats incentive_burn lives here
 SUBNET_LATEST_PATH = "/api/subnet/latest/v1"          # live fallback for incentive_burn
 MINER_BURNED_SCALE = 2 ** 32     # MinerBurned fixed-point: bits / 2**32 -> fraction [0,1]
+
+
+def _unwrap(x: Any) -> Any:
+    """Unwrap substrate decode artifacts: ScaleObj.value, 1-tuples/lists (the
+    spec-430+ typed runtime wraps NetUid and balances in newtype tuples), and
+    fixed-point {'bits': N} dicts (returned raw — caller applies the scale)."""
+    x = getattr(x, "value", x)
+    while isinstance(x, (list, tuple)) and len(x) == 1:
+        x = x[0]
+    return x
+
+
+def _bits(x: Any) -> float | None:
+    """Numeric value out of an unwrapped storage value; fixed-point dicts give
+    their raw bits (caller divides by the scale)."""
+    x = _unwrap(x)
+    if isinstance(x, dict):
+        x = x.get("bits")
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    return float(x)
+
+
+def _qmap(st, storage: str, scale: float = 1.0) -> dict[int, float]:
+    """query_map a per-netuid SubtensorModule storage into {netuid: value/scale}."""
+    out: dict[int, float] = {}
+    for k, v in st.substrate.query_map("SubtensorModule", storage, page_size=500):
+        key = _unwrap(k)
+        val = _bits(v)
+        if key is None or val is None:
+            continue
+        out[int(key)] = val / scale
+    return out
 
 
 def _f(x: Any) -> float | None:
@@ -121,17 +155,12 @@ def _all_miner_burned(st) -> dict[int, float]:
     so the model needs EVERY subnet's burn — not just SN21's — or SN21's relative
     share is biased low (81/128 subnets currently burn). Confirmed live on finney:
     the `MinerBurned` storage map exists (new coinbase runtime)."""
-    out: dict[int, float] = {}
     try:
-        for k, v in st.substrate.query_map("SubtensorModule", "MinerBurned"):
-            nu = int(getattr(k, "value", k))
-            raw = getattr(v, "value", v)
-            bits = raw.get("bits") if isinstance(raw, dict) else raw
-            if bits is not None:
-                out[nu] = min(1.0, max(0.0, float(bits) / MINER_BURNED_SCALE))
+        return {nu: min(1.0, max(0.0, b))
+                for nu, b in _qmap(st, "MinerBurned", MINER_BURNED_SCALE).items()}
     except Exception as e:  # noqa: BLE001 — never let burn lookup kill the pull
         logger.warning("MinerBurned query_map failed (old runtime?): %s", e)
-    return out
+        return {}
 
 
 def _all_excess_tao(st) -> dict[int, float]:
@@ -143,16 +172,93 @@ def _all_excess_tao(st) -> dict[int, float]:
     therefore `tao_in_emission + excess_tao_emission` — summing only the former
     misses ~59% of network emission (old/capped subnets) and inflates young
     uncapped subnets' apparent share ~3x (the former "SN21 over-emits" artifact)."""
-    out: dict[int, float] = {}
     try:
-        for k, v in st.substrate.query_map("SubtensorModule", "SubnetExcessTao"):
-            nu = int(getattr(k, "value", k))
-            raw = getattr(v, "value", v)
-            if raw is not None:
-                out[nu] = float(raw) / 1e9
+        return _qmap(st, "SubnetExcessTao", 1e9)
     except Exception as e:  # noqa: BLE001 — never let the excess lookup kill the pull
         logger.warning("SubnetExcessTao query_map failed (old runtime?): %s", e)
-    return out
+        return {}
+
+
+def _all_subnets_raw(st) -> list:
+    """Rebuild the per-subnet rows from raw storage when the SDK's `all_subnets()`
+    can't decode the runtime (spec 430+ shipped typed currency units — PR #2867 —
+    so bittensor 9.x DynamicInfo decode breaks on the tuple-wrapped NetUid, and
+    the removed Swap.AlphaSqrtPrice compat storage never came back, #2799 closed).
+    Raw query_maps decode fine, and every field the lab needs has a storage map.
+    Returns rows in the same dict shape pull_chain_state builds from DynamicInfo."""
+    alpha_in = _qmap(st, "SubnetAlphaIn", 1e9)
+    tao_in = _qmap(st, "SubnetTAO", 1e9)
+    alpha_out = _qmap(st, "SubnetAlphaOut", 1e9)
+    moving = _qmap(st, "SubnetMovingPrice", MINER_BURNED_SCALE)  # U96F32, same /2**32
+    tempo = _qmap(st, "Tempo")
+    tao_in_em = _qmap(st, "SubnetTaoInEmission", 1e9)
+    alpha_out_em = _qmap(st, "SubnetAlphaOutEmission", 1e9)
+    alpha_in_em = _qmap(st, "SubnetAlphaInEmission", 1e9)
+    rows = []
+    for nu in sorted(set(alpha_in) | set(tao_in) | set(alpha_out)):
+        if nu == 0:
+            continue
+        ai, ti = alpha_in.get(nu), tao_in.get(nu)
+        rows.append({
+            "netuid": nu,
+            "name": None,
+            "alpha_in": ai,
+            "tao_in": ti,
+            "alpha_issued": alpha_out.get(nu),
+            "spot_price": (ti / ai) if (ai and ti and ai > 0) else None,
+            "ema_price": moving.get(nu),
+            "tempo": int(tempo[nu]) if nu in tempo else None,
+            "tao_in_emission": tao_in_em.get(nu),
+            "alpha_out_emission": alpha_out_em.get(nu),
+            "alpha_in_emission": alpha_in_em.get(nu),
+        })
+    return rows
+
+
+def _all_emission_enabled(st) -> dict[int, bool]:
+    """Per-subnet SubnetEmissionEnabled. Since PR #2787 new subnets register with
+    emission OFF; the v430+ coinbase zeroes disabled subnets' TAO share and
+    renormalises over the enabled ones, so the model must zero them too."""
+    try:
+        out: dict[int, bool] = {}
+        for k, v in st.substrate.query_map("SubtensorModule", "SubnetEmissionEnabled",
+                                           page_size=500):
+            key = _unwrap(k)
+            if key is not None:
+                out[int(key)] = bool(_unwrap(v))
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SubnetEmissionEnabled query_map failed (old runtime?): %s", e)
+        return {}
+
+
+class _RawChain:
+    """Minimal shim so the query helpers keep their `st.substrate.…` shape:
+    wraps one raw SubstrateInterface connection."""
+
+    def __init__(self, sub):
+        self.substrate = sub
+
+    def get_current_block(self) -> int:
+        return int(self.substrate.get_block_number(self.substrate.get_chain_head()))
+
+    def close(self) -> None:
+        try:
+            self.substrate.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _subnet_names() -> dict[int, str]:
+    """Subnet names via the bittensor 11 read — cosmetic, never fatal."""
+    try:
+        from chain_compat import get_subtensor
+
+        return {int(k): str(v)
+                for k, v in (get_subtensor().subnets.subnet_names() or {}).items()}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("subnet_names read failed: %s", e)
+        return {}
 
 
 def _root_stake_tao(network: str = NETWORK) -> float | None:
@@ -160,9 +266,9 @@ def _root_stake_tao(network: str = NETWORK) -> float | None:
     root_prop. Summed from the netuid-0 metagraph, as root_reborn_model.py does.
     Heavy (~10-20s metagraph sync); guarded so a failure doesn't kill the pull."""
     try:
-        import bittensor as bt
+        from chain_compat import fetch_metagraph
 
-        mg0 = bt.Metagraph(netuid=0, network=network, sync=True)
+        mg0 = fetch_metagraph(0, network=network)
         return sum(float(s) for s in mg0.S)
     except Exception as e:  # noqa: BLE001
         logger.warning("root stake (netuid 0) sum failed: %s", e)
@@ -176,19 +282,15 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     Returns a dict (JSON-safe) with global params + a per-subnet list. Snapshotted
     verbatim into every lab run so historical runs stay reproducible. Raises on a
     failed connection so callers never silently model stale state."""
+    # Ported off the bittensor SDK entirely (2026-07-21): the spec-430 runtime
+    # broke 9.x's all_subnets() decode, and bittensor 11 has no bulk pool read.
+    # Raw storage query_maps are the primary (and only) path now — they decode
+    # fine on the typed runtime and carry every field the lab needs. Subnet
+    # names come from the v11 subnet_names read, guarded (cosmetic only).
     _configure_chain_ssl()
-    import bittensor as bt
+    from chain_compat import substrate as _compat_substrate
 
-    st = bt.Subtensor(network=network, log_verbose=False)
-    # NB: bittensor 9.12.2 logs a benign "Storage function 'Swap.AlphaSqrtPrice'
-    # not found" warning here — the live runtime renamed the Swap pallet's pricing
-    # storage (now SwapBalancer/ScrapReservoirAlpha). That only breaks the SDK's
-    # auxiliary bulk-price helper; DynamicInfo.price (spot) and .moving_price (EMA)
-    # still decode correctly, and we recompute spot as tao_in/alpha_in regardless.
-    # Verified: all 128 subnets priced despite the warning. The SDK lags the
-    # runtime, so a planned bittensor upgrade is worthwhile, but it is not a
-    # data-correctness fix — the price guard below fails loud if that ever changes.
-    raw = st.all_subnets() or []
+    st = _RawChain(_compat_substrate())
     try:
         block = int(st.get_current_block())
     except Exception:  # noqa: BLE001
@@ -196,8 +298,8 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
 
     # Global tao_weight (u64 normalised to 1.0).
     try:
-        tw_raw = st.substrate.query("SubtensorModule", "TaoWeight", []).value
-        tao_weight = float(tw_raw) / U64_MAX
+        tw_raw = _bits(st.substrate.query("SubtensorModule", "TaoWeight", []))
+        tao_weight = tw_raw / U64_MAX if tw_raw is not None else None
     except Exception as e:  # noqa: BLE001
         logger.warning("TaoWeight query failed: %s", e)
         tao_weight = None
@@ -207,56 +309,70 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     # scalar, same for every subnet. Replaces the old metagraph-stake-sum proxy
     # (and the ~10-20s netuid-0 sync it needed). Source-confirmed by Action 1.
     try:
-        rt_raw = st.substrate.query("SubtensorModule", "SubnetTAO", [0]).value
-        root_tao = float(rt_raw) / 1e9
+        # spec-430+ wraps balances in a newtype 1-list — _bits unwraps either shape
+        rt_raw = _bits(st.substrate.query("SubtensorModule", "SubnetTAO", [0]))
+        root_tao = rt_raw / 1e9 if rt_raw is not None else None
     except Exception as e:  # noqa: BLE001
         logger.warning("SubnetTAO[0] query failed: %s", e)
         root_tao = None
 
+    # v440 emission-gate hyperparams (U64F64). These are READ, not fitted: q and h
+    # are plain storage items settable by one `sudo_set_emission_bar_quantile` /
+    # `sudo_set_emission_gate_exponent` root call (no runtime upgrade, effective the
+    # next block), and theta is the bar the chain itself last computed. Reading them
+    # is what anchors the gate mechanism to reality — an earlier calibration FITTED
+    # q~0.77/h~2.9 to SN21's observed share when the chain was in fact running
+    # q=0.75/h=3.0. dereg_watch.py alerts if any of them move.
+    gate_q = gate_h = gate_theta = None
+    for name, key in (("EmissionBarQuantile", "q"), ("EmissionGateExponent", "h"),
+                      ("EmissionGateBar", "theta")):
+        try:
+            raw = _bits(st.substrate.query("SubtensorModule", name, []))
+            val = raw / U64F64_SCALE if raw is not None else None
+        except Exception as e:  # noqa: BLE001 — pre-v440 runtimes lack these
+            logger.warning("%s query failed (pre-v440 runtime?): %s", name, e)
+            val = None
+        if key == "q":
+            gate_q = val
+        elif key == "h":
+            gate_h = val
+        else:
+            gate_theta = val
+
     # Global owner cut (u16 normalised) — the 18% slice.
     try:
-        oc_raw = st.substrate.query("SubtensorModule", "SubnetOwnerCut", []).value
-        owner_cut = float(oc_raw) / U16_MAX
+        oc_raw = _bits(st.substrate.query("SubtensorModule", "SubnetOwnerCut", []))
+        owner_cut = oc_raw / U16_MAX if oc_raw is not None else None
     except Exception as e:  # noqa: BLE001
         logger.warning("SubnetOwnerCut query failed: %s", e)
         owner_cut = None
+
+    # SN21 burned-registration cost (adaptive, TAO) — input to the S8 collateral
+    # scenario (v435: split into burned (1-p) + locked p once deployed).
+    try:
+        rc_raw = _bits(st.substrate.query("SubtensorModule", "Burn", [netuid]))
+        reg_cost_tao = rc_raw / 1e9 if rc_raw is not None else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Burn[%s] query failed: %s", netuid, e)
+        reg_cost_tao = None
 
     # Per-subnet economic burn (= Taostats incentive_burn), needed for the
     # renormalised (1 - burn) split across ALL subnets, not just SN21.
     miner_burned = _all_miner_burned(st)
     excess_tao = _all_excess_tao(st)
+    emission_enabled = _all_emission_enabled(st)
 
-    subnets = []
-    for d in raw:
-        nu = getattr(d, "netuid", None)
-        if nu is None:
-            continue
-        nu = int(nu)
-        if nu == 0:
-            continue  # root has no alpha pool
-        alpha_in = _f(getattr(d, "alpha_in", None))
-        tao_in = _f(getattr(d, "tao_in", None))
-        alpha_out = _f(getattr(d, "alpha_out", None))
-        spot = (tao_in / alpha_in) if (alpha_in and tao_in and alpha_in > 0) else None
-        moving = _f(getattr(d, "moving_price", None))
-        subnets.append({
-            "netuid": nu,
-            "name": getattr(d, "subnet_name", None),
-            "alpha_in": alpha_in,            # pool alpha reserve
-            "tao_in": tao_in,                # pool TAO reserve
-            "alpha_issued": alpha_out,       # A — alpha outstanding (SubnetAlphaOut)
-            "spot_price": spot,              # tao_in / alpha_in
-            "ema_price": moving,             # SubnetMovingPrice (the 'salary')
-            "tempo": _int(getattr(d, "tempo", None)),
-            "miner_burn": miner_burned.get(nu, 0.0),   # on-chain MinerBurned (=incentive_burn)
-            # chain's actual per-block emission — reproduction-gate ground truth.
-            # tao_in_emission is the LIQUIDITY-INJECTION leg only; excess_tao_emission
-            # is the chain-buy leg. Actual total = the sum of both.
-            "tao_in_emission": _f(getattr(d, "tao_in_emission", None)),
-            "excess_tao_emission": excess_tao.get(nu, 0.0),
-            "alpha_out_emission": _f(getattr(d, "alpha_out_emission", None)),
-            "alpha_in_emission": _f(getattr(d, "alpha_in_emission", None)),
-        })
+    subnets = _all_subnets_raw(st)
+    names = _subnet_names()
+
+    for s in subnets:
+        nu = s["netuid"]
+        s["name"] = names.get(nu)
+        s["miner_burn"] = miner_burned.get(nu, 0.0)   # on-chain MinerBurned (=incentive_burn)
+        s["excess_tao_emission"] = excess_tao.get(nu, 0.0)
+        # Missing map entry -> chain default True (ValueQuery default is per-#2787
+        # False only for NEW registrations, which write an explicit entry).
+        s["emission_enabled"] = emission_enabled.get(nu, True)
 
     root_stake = _root_stake_tao(network) if include_root_stake else None
 
@@ -277,6 +393,8 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
     if sn21_b is None:
         sn21_b = _current_miner_burn()
 
+    st.close()
+
     return {
         "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
         "block": block,
@@ -287,6 +405,12 @@ def pull_chain_state(netuid: int = NETUID_SN21, network: str = NETWORK,
         "root_tao": root_tao,              # SubnetTAO[0] — exact root_proportion input
         "root_stake_tao": root_stake,      # legacy metagraph sum (only if include_root_stake)
         "sn21_miner_burn": sn21_b,
+        "sn21_reg_cost_tao": reg_cost_tao,
+        # v440 gate, read from chain (None on pre-v440 runtimes). Mechanisms use
+        # these as the live values; `_gate_q`/`_gate_h` still override for sweeps.
+        "gate_q": gate_q,
+        "gate_h": gate_h,
+        "gate_theta": gate_theta,
         "n_subnets": len(subnets),
         "subnets": subnets,
     }

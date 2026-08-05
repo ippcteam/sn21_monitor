@@ -90,6 +90,35 @@ def get(version: str) -> Mechanism:
     return REGISTRY[version]
 
 
+# The mechanism verified to be live on finney — the reproduction gate anchors on
+# this and scenarios model it. Flipped from the three-switch incumbent on
+# 2026-07-20 after the v430-v432 runtime deploys (spec 432 live; the spec-425
+# detector confirmed price x (1-burn) now fits the chain best).
+#
+# Flipped again 2026-07-29 to the v440 gate. The un-gated v432 formula had been
+# failing its own reproduction gate since the gate went live at block ~8,715,000
+# (network median rel.err 1.78, 6/62 subnets within tolerance, SN21 modeled 64x
+# its actual share) — the runner was printing "REGRESSION DETECTOR" every run.
+# Measured against live state at block ~8,728,000 with q/h READ FROM CHAIN:
+#
+#     root_reborn_v425_2800   median rel.err 1.783   6/62 within   SN21 off by 64.0x
+#     hill_gate_v440_2990     median rel.err 0.207  27/62 within   SN21 off by 0.33x
+#
+# NOTE: the gate mechanism is far better but still does NOT clear the 0.15
+# tolerance, so magnitudes stay DIRECTIONAL and there is residual model error to
+# chase (candidates: the emit-enabled set, the MinerBurned basis, the excess-TAO
+# leg). An earlier calibration reported rel.err 0.024 by FITTING (q,h) to SN21's
+# own share — circular, and it hid this gap. Revert by restoring the line below.
+LIVE_VERSION = "hill_gate_v440_2990"
+
 # Populate the registry. Import side-effects register each mechanism.
 from . import incumbent  # noqa: E402,F401
 from . import root_reborn_v346_421  # noqa: E402,F401
+from . import root_reborn_v425_2800  # noqa: E402,F401
+from . import collateral_v435_2953  # noqa: E402,F401
+from . import hill_gate_v440_2990  # noqa: E402,F401
+# Open PRs from the 2026-07-28/29 burst — all proposals, none merged.
+from . import ranked_tiers_3010  # noqa: E402,F401
+from . import conviction_boost_3011  # noqa: E402,F401
+from . import chain_buy_cap_3012  # noqa: E402,F401
+from . import q_raise_3013  # noqa: E402,F401

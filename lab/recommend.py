@@ -26,38 +26,56 @@ Two magnitude corrections encoded here (2026-07-02):
    version claimed the owner cut scales with the (1-b) slice — wrong.)
 2. PRICE ONLY MOVES VIA CHAIN BUYS (S6). Liquidity injection adds both pool sides at
    spot; the direct price channel is the excess TAO above the injection cap
-   (root_prop x alpha_emission), which today opens only once burn drops below ~0.5.
+   (root_prop x alpha_emission), which opens once burn drops below the S6-computed
+   threshold (chain_buy_threshold_b — moved up from ~0.5 to ~0.77 when the v430-432
+   deploy removed root_prop from the share, so it now sits ABOVE typical burns).
    Shallow cuts buy depth, not price — the price case is for DEEP cuts (b <= 0.2),
    staged, with realized miner dump kept below the S5 breakeven.
+
+Update 2026-07-20 (v430-432 deploys live, spec 432): the share formula is now
+price x (1-MinerBurned) over emit-enabled subnets — root_prop is OUT of the share
+(it still caps injection). MinerBurned recomputes every tempo, so burn moves take
+effect the next tempo. The same deploy activated conviction-based ownership
+transfer — see the priority-2 defense action.
 """
 
 from __future__ import annotations
 
 from collector import load_json
 from config import DATA_DIR
-from .scenarios import (
-    DEREG_FLOOR_TAO, DEREG_HEADROOM_MIN, MAX_WEEKLY_PRICE_IMPACT, _sn21,
-)
+from dereg_watch import DEREG_BUFFER_MIN, TIER_LABELS, load_dereg_state
+from .scenarios import MAX_WEEKLY_PRICE_IMPACT, _sn21
 
 WEIGHTS_STORE = DATA_DIR / "weights_scan.json"
 
 
 def _price_standing(state: dict) -> dict:
+    """Where SN21 sits on price — and, from the live dereg watch, where it sits in
+    the prune QUEUE, which is the thing that actually kills subnets. Dereg ranks on
+    the EMA price among non-immune subnets; there is no absolute floor to be above."""
     me = _sn21(state)
     spot = me.get("spot_price") or 0.0
     prices = sorted((s.get("spot_price") or 0.0) for s in state["subnets"] if s.get("spot_price"))
-    n = len(prices)
     rank = sum(1 for p in prices if p < spot) + 1 if spot else None  # 1 = cheapest
-    headroom = (spot / DEREG_FLOOR_TAO - 1.0) if spot else None
-    n_below_floor = sum(1 for p in prices if p < DEREG_FLOOR_TAO)
+
+    d = load_dereg_state()
     return {
         "spot": spot,
         "ema": me.get("ema_price"),
-        "dereg_floor": DEREG_FLOOR_TAO,
-        "headroom_pct": round(headroom * 100, 1) if headroom is not None else None,
         "price_rank_from_cheapest": rank,
-        "n_priced": n,
-        "n_below_floor": n_below_floor,
+        "n_priced": len(prices),
+        # Live prune-queue position (None until dereg_watch has run).
+        "dereg_tier": d.get("tier"),
+        "subnets_below": d.get("subnets_below"),
+        "n_prunable": d.get("n_prunable"),
+        "dereg_floor_tao": d.get("floor_tao"),
+        "dereg_floor_netuid": d.get("floor_netuid"),
+        "dereg_guard_tao": d.get("guard_tao"),
+        "drop_to_target_pct": d.get("drop_to_target_pct"),
+        "runway_days": d.get("runway_days"),
+        "days_per_prune": d.get("days_per_prune"),
+        "buffer_places_lost_14d": (d.get("erosion") or {}).get("places_lost"),
+        "dereg_checked_at": d.get("checked_at"),
     }
 
 
@@ -72,23 +90,33 @@ def _scored_miners() -> int | None:
 
 
 def _dereg_risk(ps: dict) -> dict:
-    h = ps.get("headroom_pct")
-    if h is None:
-        level = "unknown"
-    elif h >= DEREG_HEADROOM_MIN * 100 * 2:
-        level = "low"
-    elif h >= DEREG_HEADROOM_MIN * 100:
+    """Risk level tracks the live prune-queue tier, not a price threshold. The
+    buffer is how many non-immune subnets have a lower EMA than ours: each new
+    subnet registration dissolves exactly one of them, cheapest EMA first."""
+    tier = ps.get("dereg_tier")
+    if tier is None:
+        return {
+            "name": "Deregistration",
+            "level": "unknown",
+            "detail": "No live dereg data — run dereg_watch.py (refreshes every 2 days).",
+        }
+    level = {0: "low", 1: "low", 2: "medium", 3: "high", 4: "high", 5: "high"}[tier]
+    # A fast-eroding buffer outranks a comfortable level: 36 -> 24 in 8 days (the
+    # 2026-07-29 slide) is tier 0 the whole way down.
+    lost = ps.get("buffer_places_lost_14d")
+    if lost is not None and lost >= 8 and level == "low":
         level = "medium"
-    else:
-        level = "high"
-    return {
-        "name": "Deregistration",
-        "level": level,
-        "detail": (f"Spot {ps['spot']:.6f} is {h:.1f}% above the assumed dereg floor "
-                   f"{ps['dereg_floor']:.4f} ({ps['n_below_floor']}/{ps['n_priced']} subnets below it). "
-                   f"Keep spot ≥ {DEREG_HEADROOM_MIN*100:.0f}% above the floor."
-                   if h is not None else "No price data."),
-    }
+    detail = (
+        f"{ps['subnets_below']} of {ps['n_prunable']} prunable subnets sit below our EMA "
+        f"{ps['ema'] or 0:.6f} — {TIER_LABELS[tier]}. Next in line is netuid "
+        f"{ps['dereg_floor_netuid']} @ {ps['dereg_floor_tao']:.6f} ({ps['drop_to_target_pct']}% "
+        f"below us). At one prune every ~{ps['days_per_prune']} d that is ~{ps['runway_days']:.0f} d "
+        f"of runway at this rank."
+    )
+    if lost is not None:
+        direction = "lost" if lost >= 0 else "gained"
+        detail += f" Buffer {direction} {abs(lost)} places in the last 14 d."
+    return {"name": "Deregistration", "level": level, "detail": detail}
 
 
 def _block_risk(b_now: float, scored: int | None) -> dict:
@@ -117,6 +145,7 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
     S4 = scenarios.get("S4", {}) or {}
     S5 = scenarios.get("S5", {}) or {}
     S6 = scenarios.get("S6", {}) or {}
+    S7 = scenarios.get("S7", {}) or {}
 
     share_now = (S2.get("inputs") or {}).get("share_current_pct")
     share_b0 = (S2.get("inputs") or {}).get("share_no_burn_pct")
@@ -133,13 +162,17 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
 
     actions = []
 
-    # 1 — Burn (master lever; aligns price + owner-alpha VALUE + legibility)
+    # 1 — Burn (master lever; aligns price + owner-alpha VALUE + legibility).
+    # Since the v430-432 deploy the share is price x (1-b) with NO root_prop and
+    # MinerBurned recomputes EVERY TEMPO — a burn cut pays out the next tempo.
     if b_now > 0.001:
         target_b = s5_in.get("target_b")
+        thr_b = s6_in.get("chain_buy_threshold_b")
+        thr_txt = f"~{thr_b:.2f}" if thr_b is not None else "the S6 threshold"
         # safe single step from S5: largest sell_fraction keeping net pool flow >= 0
         safe_rows = [r for r in (S5.get("table") or []) if r.get("net_positive")]
         safe_dump = max((r["miner_sell_fraction"] for r in safe_rows), default=0.0)
-        price_txt = ("↑ only once burn < ~0.5 (chain-buy threshold "
+        price_txt = (f"↑ once burn < {thr_txt} (chain-buy threshold "
                      f"~{s6_in.get('chain_buy_threshold_tao_day')} TAO/day); "
                      f"best S6 case at 15% dump: {s6_best['d90_vs_hold_pct']:+.1f}% @90d / "
                      f"{s6_best['d180_vs_hold_pct']:+.1f}% @180d at b={s6_best['b']:.2f}"
@@ -149,9 +182,11 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
             "priority": 1,
             "lever": "Burn rate",
             "action": (f"Reduce burn from b={b_now:.2f} DEEP (target ≤0.2, then 0) in staged "
-                       f"steps — next step to b≈{target_b:.2f}. Shallow cuts (stopping above "
-                       f"~0.5) add pool depth but ~zero price." if target_b is not None else
-                       f"Reduce burn from b={b_now:.2f} deep toward 0 (price channel opens below ~0.5)."),
+                       f"steps — next step to b≈{target_b:.2f}. Effect lands NEXT TEMPO "
+                       f"(MinerBurned is per-tempo). Shallow cuts (stopping above "
+                       f"{thr_txt}) add pool depth but ~zero price." if target_b is not None else
+                       f"Reduce burn from b={b_now:.2f} deep toward 0 (price channel opens below {thr_txt}; "
+                       "effect lands next tempo)."),
             "effect_price": price_txt,
             "effect_owner_alpha": (f"quantity FIXED at ~{s6_in.get('owner_alpha_day', 1296):,.0f}/day "
                                    "(18% cut is burn-independent); its VALUE rises with price"),
@@ -172,56 +207,147 @@ def build_recommendations(state: dict, scenarios: dict) -> dict:
             "confidence": "HIGH",
         })
 
-    # 2 — Extraction (realise owner alpha without breaching the dereg floor)
-    if opt:
+    # 2 — Conviction takeover defense (LIVE since the v430-432 deploys, 2026-07-13..16).
+    # change_subnet_owner_if_needed runs every epoch: total rolled conviction >= 10%
+    # of SubnetAlphaOut + subnet >= 1yr old + a non-owner hotkey out-convicts the
+    # owner => ownership MOVES. SN21 verified 2026-07-20: age 2.1y (clause ARMED),
+    # threshold ~359k alpha, ZERO HotkeyLock entries — nobody can seize it today,
+    # but we hold no defensive conviction either.
+    actions.append({
+        "priority": 2,
+        "lever": "Ownership defense (conviction)",
+        "action": ("Build owner conviction NOW: enable the `owner_cut_auto_lock_enabled` "
+                   "hyperparam (compounds the ~1,296 alpha/day owner cut into a conviction "
+                   "lock every tempo) and/or lock a seed tranche of owner alpha "
+                   "(btcli lock). Target: owner conviction comfortably above any "
+                   "plausible challenger before total subnet conviction nears the "
+                   "~359k-alpha (10% of SubnetAlphaOut) takeover threshold."),
+        "effect_price": "neutral (locking removes no liquidity from the pool)",
+        "effect_owner_alpha": "unchanged quantity; locked tranche unlocks ~50% per 90d if needed",
+        "guardrail": ("Locked alpha is slow to exit (UnlockRate ~50%/90d) — size the seed "
+                      "lock so planned extraction (action 3) still clears. Watch "
+                      "HotkeyLock[21] for ANY third-party lock: that is the takeover "
+                      "prep signal (stake_watch candidate)."),
+        "confidence": "HIGH — source-read (staking/lock.rs change_subnet_owner_if_needed) "
+                      "+ chain-verified: clause armed for SN21, zero locks exist today.",
+    })
+
+    # 2b — v435 collateral prep (PR #2953 merged 2026-07-21, deploy pending):
+    # decide hyperparams BEFORE it lands so the curated-set policy switches to
+    # the chain-native rail on day one.
+    S8 = scenarios.get("S8", {}) or {}
+    s8_in = S8.get("inputs") or {}
+    if S8.get("summary") and not S8.get("error"):
         actions.append({
             "priority": 2,
+            "lever": "v435 collateral prep (deploy pending)",
+            "action": ("Pre-decide CollateralLockShare p≈0.75-0.9 and CollateralDrainRatio "
+                       "k≈0.5 for SN21, and size min_locked floors for the curated set "
+                       "(see S8). High p is miner-FRIENDLY for scored miners (recoverable "
+                       f"in days at today's {s8_in.get('reg_cost_tao', 0.1):.2f}-TAO reg "
+                       "cost) while squatters' share freezes forever and hotkey rotation "
+                       "is blocked."),
+            "effect_price": "mild ↑ — collateral is an AMM buy at registration; floors lock float",
+            "effect_owner_alpha": "neutral (owner cut untouched); emission share formula unchanged",
+            "guardrail": ("Do NOT set floors so high that scored miners' capture phase eats "
+                          "the retention-policy allowance; announce policy with the burn "
+                          "steps. Deploy trigger: v435 release tag / finney spec >= 435 "
+                          "(lab watcher covers it)."),
+            "confidence": "SOURCE-READ (collateral.rs @ main); numbers from S8 on live state.",
+        })
+
+    # 3 — Retention policy via curated miner set (couples with the burn cut; S7)
+    # NOTE 2026-07-03: the PUBLIC entry-stake gate is WITHDRAWN (OTF has emission-cut /
+    # FUDded "stake-to-mine" subnets as Ponzi, and spec-425 conviction makes third-party
+    # alpha accumulation a takeover vector). Retention stays, enforced through curation.
+    s7_rows = [r for r in (S7.get("table") or []) if r.get("retention") == 0.85]
+    s7_plan = next((r for r in s7_rows if r.get("b") == 0.20), None) or \
+              (max(s7_rows, key=lambda r: r["d90_vs_hold_pct"]) if s7_rows else None)
+    if s7_plan and b_now > 0.001:
+        actions.append({
+            "priority": 3,
+            "lever": "Miner retention via curated set",
+            "action": ("Enforce ≥85% retention of freed rewards through a CURATED miner set "
+                       "(private operating agreement; zero weight if a coldkey sells >15%/week — "
+                       "per-coldkey flow monitoring already runs daily). NO public stake-to-mine "
+                       "rule (withdrawn 2026-07-03: OTF Ponzi-pattern precedent + spec-425 "
+                       "conviction risk). Brief the miner set with burn step 1."),
+            "effect_price": (f"makes the S6 15%-dump row the ENFORCED case "
+                             + (f"({s6_best['d90_vs_hold_pct']:+.1f}% @90d / "
+                                f"{s6_best['d180_vs_hold_pct']:+.1f}% @180d at b={s6_best['b']:.2f})"
+                                if s6_best else "")),
+            "effect_owner_alpha": "retained rewards shrink circulating float; owner quantity "
+                                  "unchanged, value tracks price",
+            "guardrail": ("Never tighten retention in a drawdown (soft hold → exit trigger). "
+                          "Miners hold PLAIN stake only — locked stake builds conviction, the "
+                          "conviction-takeover vector that is NOW LIVE (v430-432)."),
+            "confidence": "MODELED (S7/S6 engine) — enforcement is weight-setting we fully "
+                          "control; no chain mechanism needed or wanted.",
+        })
+
+    # 3 — Extraction (realise owner alpha without breaching the dereg floor)
+    if opt:
+        actions.append({
+            "priority": 4,
             "lever": "Extraction",
             "action": (f"Sell ≤ {opt.get('alpha_per_week'):,.0f} alpha/week "
                        f"({opt.get('weekly_sell_frac_of_reserve', 0)*100:.2f}% of reserve) "
                        f"→ ~{opt.get('realized_tao_per_week'):,.0f} TAO."),
             "effect_price": f"≤ {abs(opt.get('price_impact_pct', 0)):.2f}% weekly impact (capped)",
             "effect_owner_alpha": "converts owner alpha to TAO at the max safe rate",
-            "guardrail": (f"Bound by {opt.get('binding_constraint')}; keeps spot "
-                          f"≥ {DEREG_HEADROOM_MIN*100:.0f}% above the dereg floor."),
+            "guardrail": (f"Bound by {opt.get('binding_constraint')}; keeps at least "
+                          f"{DEREG_BUFFER_MIN} subnets below us in the prune queue."),
             "confidence": "MEASURED (constant-product slippage on live pool depth).",
         })
 
-    # 3 — Guard the floor (only if dereg risk is not low)
+    # 4 — Guard the rank (only if dereg risk is not low)
     if risks[0]["level"] in ("medium", "high", "unknown"):
         actions.append({
-            "priority": 3,
+            "priority": 5,
             "lever": "Dereg guard",
-            "action": "Throttle extraction and/or add buy-side support to rebuild floor headroom "
-                      "before reducing burn further.",
-            "effect_price": "protects against floor breach",
-            "effect_owner_alpha": "preserves the subnet (no emission if deregistered)",
-            "guardrail": f"Dereg headroom currently {ps.get('headroom_pct')}%.",
-            "confidence": "HIGH (floor breach zeroes everything).",
+            "action": "Stop extraction and stake TAO into the SN21 pool to rebuild the rank "
+                      "buffer. The buy raises spot and the EMA follows within ~1 day "
+                      "(~8-hour half-life) — see dereg_watch's defence table for sizing.",
+            "effect_price": "raises spot directly, which IS the pruning metric",
+            "effect_owner_alpha": "preserves the subnet (deregistration dissolves the pool)",
+            "guardrail": (f"{ps.get('subnets_below')} subnets below us; "
+                          f"{ps.get('drop_to_target_pct')}% to become the prune target."),
+            "confidence": "HIGH (chain-simulated swap; deregistration zeroes everything).",
         })
 
     # Verdict
-    decay = S3.get("inputs") or {}
     verdict_bits = []
+    thr_b = s6_in.get("chain_buy_threshold_b")
+    thr_txt = (f"price channel {'ALREADY OPEN' if (thr_b is not None and b_now < thr_b) else 'opens'} "
+               f"below b≈{thr_b:.2f}" if thr_b is not None
+               else "price channel per S6 threshold")
     if b_now > 0.001:
         tgt = s5_in.get("target_b")
         verdict_bits.append(
             (f"reduce burn {b_now:.2f}→{tgt:.2f} now, staged on to ≤0.2 "
-             f"(price channel opens below ~0.5)") if tgt is not None
-            else "reduce burn deep (≤0.2; price channel opens below ~0.5)")
+             f"({thr_txt}; effect lands next tempo)") if tgt is not None
+            else f"reduce burn deep (≤0.2; {thr_txt})")
+    verdict_bits.append("lock owner conviction (takeover clause LIVE + armed for SN21; "
+                        "zero locks exist)")
+    if s7_plan and b_now > 0.001:
+        verdict_bits.append("enforce ≥85% retention via the curated miner set (S7; no public "
+                            "stake gate) so the ≤15% dump gate is enforced, not assumed")
     if opt:
         verdict_bits.append(f"extract ≤{opt.get('alpha_per_week'):,.0f} alpha/wk")
     verdict = ("To grow price + owner alpha: " + ", ".join(verdict_bits) +
-               f". Dereg headroom {ps.get('headroom_pct')}% ({risks[0]['level']}), "
+               f". Dereg buffer {ps.get('subnets_below')} subnets below us "
+               f"(~{ps.get('runway_days')} d runway, {risks[0]['level']}), "
                f"emission-blocking {risks[1]['level']}. "
-               "Youth allowance (root_prop) is near peak now and fades slowly "
-               f"(~{decay.get('root_prop_now')} → 30mo), so front-load while it's high.")
+               "Share no longer decays with age (root_prop out of the share since "
+               "v430-432); the aging effect is a widening chain-buy price channel.")
 
     return {
         "objective": "Maximise alpha price + owner alpha; avoid deregistration & emission-blocking.",
         "guardrails": {
-            "dereg_floor_tao": DEREG_FLOOR_TAO,
-            "dereg_headroom_min_pct": DEREG_HEADROOM_MIN * 100,
+            # Live, from dereg_watch — the floor moves as the field re-ranks.
+            "dereg_floor_tao": ps.get("dereg_floor_tao"),
+            "dereg_guard_tao": ps.get("dereg_guard_tao"),
+            "dereg_buffer_min": DEREG_BUFFER_MIN,
             "max_weekly_price_impact_pct": MAX_WEEKLY_PRICE_IMPACT * 100,
         },
         "standing": {
