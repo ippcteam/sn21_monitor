@@ -34,7 +34,9 @@ from config import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
-REPO = os.environ.get("SUBTENSOR_REPO", "opentensor/subtensor")
+# Org migrated opentensor -> RaoFoundation (PR #2834, 2026-07-07); GitHub
+# redirects the old slug but poll the canonical one.
+REPO = os.environ.get("SUBTENSOR_REPO", "RaoFoundation/subtensor")
 WATCH_STATE = DATA_DIR / "lab_watch_state.json"
 DRAFTS_DIR = Path(__file__).resolve().parent / "mechanisms" / "_drafts"
 TIMEOUT = 30

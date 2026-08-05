@@ -39,12 +39,13 @@ def _score(sub: dict, state: dict) -> float:
 
 register(Mechanism(
     id="incumbent",
-    label="Incumbent (Root Reborn three-switch — live)",
+    label="Root Reborn three-switch (SUPERSEDED Jul 2026)",
     pr_url=PR_URL,
     activation_block=None,
-    stage="mainnet",  # this IS the live finney mechanism -> Go now
+    stage="mainnet",  # kept in the mainnet lane as the previous live formula
     score=_score,
-    notes=("Source-confirmed live mechanism: price x root_proportion x (1-burn), "
-           "per-subnet, renormalised. Reproduces the dominant structure; residual "
-           "error is the exact root_proportion formula (next refinement)."),
+    notes=("Was the live mechanism until the v430-v432 runtime deploys "
+           "(2026-07-13..16) removed root_prop from the share (PR #2800). "
+           "Superseded by root_reborn_v425_2800 (price x (1-burn)); kept "
+           "registered as the reproduction gate's regression comparator."),
 ))

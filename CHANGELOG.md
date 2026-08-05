@@ -2,6 +2,87 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-07-29 — Emission gate: read q/h/θ instead of fitting them
+
+### Fixed
+- **The gate hyperparams were fitted when they can simply be read.** `q`, `h` and
+  `θ` are plain storage items (`EmissionBarQuantile`, `EmissionGateExponent`,
+  `EmissionGateBar`). The lab carried `LIVE_Q = 0.77 / LIVE_H = 2.9`, fitted to
+  SN21's observed share; **the chain runs q = 0.75, h = 3.0 exactly**. `chain_pull`
+  now reads all three into ChainState (`gate_q`/`gate_h`/`gate_theta`) and
+  `hill_gate_v440_2990` consumes them, preferring the chain's own last-computed θ
+  over reconstructing the bar. `_gate_q`/`_gate_h` still override, for sweeps.
+- **`LIVE_VERSION` flipped to `hill_gate_v440_2990`.** The un-gated v432 formula
+  had been failing its own reproduction gate since the gate activated at block
+  ~8,715,000 — every run printed "REGRESSION DETECTOR". Measured on live state at
+  block ~8,728,000 with the chain-read hyperparams:
+
+  | mechanism | network median rel.err | within tol | SN21 |
+  |---|---|---|---|
+  | `root_reborn_v425_2800` (was live) | 1.783 | 6/62 | off by 64.0× |
+  | `hill_gate_v440_2990` (now live) | 0.207 | 27/62 | off by 0.33× |
+
+  **The gate still does not clear the 0.15 tolerance** — magnitudes remain
+  directional, with residual model error to chase (emit-enabled set, MinerBurned
+  basis, excess-TAO leg). The earlier "rel.err 0.024 PASS" came from fitting
+  (q,h) to SN21's own share, which is circular and hid this gap.
+
+### Added
+- **Gate-parameter tripwire in `dereg_watch.py`** — q/h/θ are recorded every run
+  and **any change to q or h alerts**, because nothing else catches them: they
+  move by a single `ensure_root` call (`sudo_set_emission_bar_quantile`), with no
+  PR, no runtime upgrade, no release note, effective the next block. Dropping q to
+  the 0.61 code default was measured at ~×0.11 on SN21's emission. θ is recorded
+  but only reported on a ≥25% move, since the chain recomputes it every 360 blocks
+  off the live distribution and it drifts continuously.
+
+## 2026-07-29 — Dereg is a rank, not a floor: live prune-queue tripwire
+
+### Fixed
+- **The dereg floor was never a chain constant.** `DEREG_FLOOR_TAO = 0.0035`
+  (lab/scenarios.py, root_reborn_model.py) was an admitted assumption, and by
+  today SN21's own EMA (0.00338) had fallen *below* it — the lab was scoring
+  "high" dereg risk against a number the chain never reads. Source-read of
+  subtensor `main` and verified live @ block 8,727,955: `do_register_network`
+  dissolves one subnet on every registration once the network is full (128/128
+  live today), and `get_network_to_prune` (coinbase/root.rs:299) picks the
+  **lowest `SubnetMovingPrice` among non-immune subnets** (immunity 864,000
+  blocks = 120 d), ties to the earliest registration. So the guardrail is a RANK
+  buffer, not a price level.
+
+### Added
+- **`dereg_watch.py`** — live prune-queue position. Reads every subnet's EMA +
+  registration block, counts how many non-immune subnets sit below SN21 (the
+  buffer), and derives the **live floor** (the current prune target's EMA) and a
+  **guard price** (the EMA that still leaves 10 subnets below us — what
+  extraction binds against). Cross-checked against the node's own
+  `subnetInfo_getSubnetToPrune`, and the defence table is priced with
+  `swap_simSwapTaoForAlpha` rather than inferred from reserve ratios.
+  - **Kill rate** — registrations per 30/90/180 d (one prune each while full):
+    ~7.5 d/prune today → `runway_days` at the current rank.
+  - **Tier ladder 0-5** on the buffer (5 = we are the prune target), plus an
+    **erosion tripwire**: ≥8 places lost in ≤14 d alerts even when the tier is
+    unchanged — the level-only model would have stayed silent through the
+    36 → 24 slide of the last 8 days.
+- **Endpoints** — `GET /api/dereg/watch`, `GET /api/dereg/watch/history`,
+  `POST /api/dereg/watch`.
+- **Scheduler** — `dereg_watch_2d` every 2 days at **07:50 UTC**
+  (`CronTrigger(day="*/2")`, calendar-anchored so Render redeploys can't drift it).
+- **Tests** — `tests/test_dereg_watch.py`: immunity excluded from the buffer,
+  floor = cheapest *non-immune*, guard preserves the configured buffer, runway =
+  buffer × cadence, tier ladder, erosion window.
+
+### Changed
+- **S4 extraction** binds on the live `dereg_guard_tao()` instead of the fixed
+  floor; `binding_constraint` says so, and states plainly when no live data
+  exists rather than substituting a number.
+- **Recommendations** — dereg risk is tiered off the live buffer (with an
+  erosion bump), the "Dereg guard" action now says to stake TAO into the pool
+  (the EMA follows spot within ~1 day: ~8-hour half-life), and the verdict
+  reports buffer + runway instead of "headroom %".
+- **`root_reborn_model.py`** — `resolve_dereg_floor()` reads the live floor and
+  prints its provenance, so a stale fallback can never read as a live number.
+
 ## 2026-06-08 — Market context: SN21 alpha move vs the whole field
 
 ### Added
