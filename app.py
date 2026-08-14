@@ -579,6 +579,41 @@ async def api_house_snapshot_now(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/miner-payouts")
+async def api_miner_payouts(
+    since: str | None = None,
+    until: str | None = None,
+    daily: bool = False,
+    _=Depends(require_auth),
+):
+    """Subnet-wide miner α paid since go-live (default 2026-05-27).
+
+    Compact durable ledger — survives beyond the 90-day per-UID neurons store.
+    Pass daily=true to include every day row in the window.
+    """
+    try:
+        from miner_payouts_sync import get_payouts_daily, get_payouts_summary
+        if daily:
+            return get_payouts_daily(since=since, until=until)
+        return get_payouts_summary(since=since, until=until)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Miner payouts summary failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/miner-payouts/sync")
+async def api_miner_payouts_sync(_=Depends(require_auth)):
+    """Capture today's miner payout totals + ensure go-live seed is on disk."""
+    try:
+        from miner_payouts_sync import sync_miner_payouts
+        return sync_miner_payouts()
+    except Exception as e:
+        logger.exception("Miner payouts sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/house/miners")
 async def api_house_miners(_=Depends(require_auth)):
     """In-house miners: alpha holding ('my money') + rolling 4-week earnings & trend."""
@@ -1027,6 +1062,14 @@ def scheduled_neurons_daily():
         logger.exception("Scheduled neurons daily snapshot failed")
 
 
+def scheduled_miner_payouts():
+    try:
+        from miner_payouts_sync import sync_miner_payouts
+        sync_miner_payouts()
+    except Exception:
+        logger.exception("Scheduled miner payouts sync failed")
+
+
 def scheduled_market_sync():
     try:
         market_run()
@@ -1219,6 +1262,12 @@ scheduler.add_job(
     replace_existing=True,
 )
 scheduler.add_job(
+    scheduled_miner_payouts,
+    CronTrigger(hour=9, minute=2),
+    id="daily_miner_payouts",
+    replace_existing=True,
+)
+scheduler.add_job(
     scheduled_scout_scan,
     CronTrigger(hour=9, minute=15),
     id="daily_scout_scan",
@@ -1297,6 +1346,12 @@ async def startup():
     except Exception:
         logger.exception("migrate_and_rebuild_from_logs on startup")
 
+    try:
+        from miner_payouts_sync import ensure_seed_backfill
+        ensure_seed_backfill()
+    except Exception:
+        logger.exception("Miner payouts seed backfill on startup")
+
     now = datetime.now(timezone.utc)
     for run_at, msg in scheduled_tier_events():
         if run_at > now:
@@ -1314,7 +1369,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; miner-payouts 09:02; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 

@@ -68,6 +68,24 @@ POST /api/house/snapshot            # take per-UID daily snapshot now (auth)
 Set `BURN_FLIP_DATE=YYYY-MM-DD` in env to surface the expected first
 non-100% epoch on the dashboard.
 
+## Miner payouts since go-live (durable)
+
+Subnet-wide miner α paid is kept in a **compact one-row-per-day ledger** that
+is not pruned (unlike the 90-day per-UID `neurons_daily.json`). Go-live is
+**2026-05-27**. History through first deploy is seeded from Taostats
+`incentive_burn`; each day at 09:02 UTC overwrites *today* with live
+metagraph totals (`burn_summary`: gross / burned / net).
+
+```bash
+GET  /api/miner-payouts                    # cumulative since go-live (auth)
+GET  /api/miner-payouts?since=2026-05-27&until=2026-08-12&daily=true
+POST /api/miner-payouts/sync               # capture today + ensure seed (auth)
+```
+
+Seed file (repo): `seeds/miner_payouts_since_2026-05-27.json` — merged onto
+`/data` at startup if days are missing. Live `source=metagraph` rows are never
+overwritten by the seed.
+
 ## Data files (on /data disk)
 
 ```
@@ -78,6 +96,7 @@ non-100% epoch on the dashboard.
 ├── subnet_daily.json           — daily pool/holders rows for Activity tab (365d)
 ├── holders_snapshots.json      — last 7 daily holder snapshots (~1968 rows each)
 ├── neurons_daily.json          — last 90 days of per-UID earnings rows
+├── miner_payouts_daily.json    — durable daily miner α paid (gross/burned/net) since go-live
 ├── wallet_labels.json          — House vs Other label store
 ├── digest_state_<kind>.json    — per-digest idempotency state (last_sent_date, etc.)
 ├── digest_archive_<kind>.json  — per-digest memory (last 30 sent texts; LLM context)

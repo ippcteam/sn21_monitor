@@ -1,0 +1,715 @@
+{
+  "go_live_date": "2026-05-27",
+  "method": {
+    "alpha_per_day": 7200.0,
+    "owner_cut": 0.18,
+    "miner_share_of_participant": 0.5,
+    "gross_miner_alpha_per_day": 2952.0,
+    "note": "Pre-metagraph backfill: mining_alpha_net = 2952 * (1 - incentive_burn). incentive_burn from Taostats /api/subnet/history/v1 (one sample per UTC day). Live sync overwrites days with metagraph-observed burn_summary totals."
+  },
+  "generated_at_utc": "2026-08-12T20:00:00+00:00",
+  "rows": [
+    {
+      "date": "2026-05-27",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-05-28",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-05-29",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-05-30",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-05-31",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-01",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-02",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-03",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-04",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-05",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-06",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-07",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-08",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-09",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 1.0,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2952.0,
+      "mining_alpha_net": 0.0,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-10",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771572442,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2277.681849393,
+      "mining_alpha_net": 674.318150607,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-11",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771587701,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2277.726894026,
+      "mining_alpha_net": 674.273105974,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-12",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.773235676,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2282.591714351,
+      "mining_alpha_net": 669.408285649,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-13",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772045472,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2279.078233005,
+      "mining_alpha_net": 672.921766995,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-14",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771694514,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2278.042206455,
+      "mining_alpha_net": 673.957793545,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-15",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771770809,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2278.267429618,
+      "mining_alpha_net": 673.732570382,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-16",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772091249,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2279.213366903,
+      "mining_alpha_net": 672.786633097,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-17",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772625315,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2280.789929046,
+      "mining_alpha_net": 671.210070954,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-18",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772610056,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2280.744884413,
+      "mining_alpha_net": 671.255115587,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-19",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.773098344,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2282.186312657,
+      "mining_alpha_net": 669.813687343,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-20",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.77300679,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2281.916044862,
+      "mining_alpha_net": 670.083955138,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-21",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.773281453,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2282.726848249,
+      "mining_alpha_net": 669.273151751,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-22",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772487984,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2280.384527352,
+      "mining_alpha_net": 671.615472648,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-23",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772304875,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2279.84399176,
+      "mining_alpha_net": 672.15600824,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-24",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.77238117,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2280.069214923,
+      "mining_alpha_net": 671.930785077,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-25",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772442206,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2280.249393454,
+      "mining_alpha_net": 671.750606546,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-26",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772213321,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2279.573723964,
+      "mining_alpha_net": 672.426276036,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-27",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.772152285,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2279.393545434,
+      "mining_alpha_net": 672.606454566,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-28",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771862364,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2278.537697414,
+      "mining_alpha_net": 673.462302586,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-29",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771892882,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2278.627786679,
+      "mining_alpha_net": 673.372213321,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-06-30",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771831846,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2278.447608148,
+      "mining_alpha_net": 673.552391852,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-01",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.736369879,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2173.763881895,
+      "mining_alpha_net": 778.236118105,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-02",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771663996,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2277.952117189,
+      "mining_alpha_net": 674.047882811,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-03",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771618219,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2277.816983291,
+      "mining_alpha_net": 674.183016709,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-04",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771587701,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2277.726894026,
+      "mining_alpha_net": 674.273105974,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-05",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.771786069,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2278.31247425,
+      "mining_alpha_net": 673.68752575,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-06",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.768825818,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2269.573815518,
+      "mining_alpha_net": 682.426184482,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-07",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.767757687,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2266.420691234,
+      "mining_alpha_net": 685.579308766,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-08",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.767986572,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2267.096360723,
+      "mining_alpha_net": 684.903639277,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-09",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.752544442,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2221.511192493,
+      "mining_alpha_net": 730.488807507,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-10",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.748149844,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2208.538338293,
+      "mining_alpha_net": 743.461661707,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-11",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.748134585,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2208.49329366,
+      "mining_alpha_net": 743.50670634,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-12",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.749050126,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 2211.195971618,
+      "mining_alpha_net": 740.804028382,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-13",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600717174,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.317097734,
+      "mining_alpha_net": 1178.682902266,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-14",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.601281758,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1774.983749142,
+      "mining_alpha_net": 1177.016250858,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-15",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600732433,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.362142367,
+      "mining_alpha_net": 1178.637857633,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-16",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600732433,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.362142367,
+      "mining_alpha_net": 1178.637857633,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-17",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600747692,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.407186999,
+      "mining_alpha_net": 1178.592813001,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-18",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.601174945,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1774.668436713,
+      "mining_alpha_net": 1177.331563287,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-19",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.601159686,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1774.623392081,
+      "mining_alpha_net": 1177.376607919,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-20",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600488289,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1772.641428244,
+      "mining_alpha_net": 1179.358571756,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-21",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600610361,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.001785306,
+      "mining_alpha_net": 1178.998214694,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-22",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600671397,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.181963836,
+      "mining_alpha_net": 1178.818036164,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-23",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.600885023,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1773.812588693,
+      "mining_alpha_net": 1178.187411307,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-24",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.60109865,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1774.44321355,
+      "mining_alpha_net": 1177.55678645,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-25",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.601159686,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1774.623392081,
+      "mining_alpha_net": 1177.376607919,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-26",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.601174945,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1774.668436713,
+      "mining_alpha_net": 1177.331563287,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-27",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450751507,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.618448157,
+      "mining_alpha_net": 1621.381551843,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-28",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450766766,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.66349279,
+      "mining_alpha_net": 1621.33650721,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-29",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450949874,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1331.204028382,
+      "mining_alpha_net": 1620.795971618,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-30",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450766766,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.66349279,
+      "mining_alpha_net": 1621.33650721,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-07-31",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450766766,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.66349279,
+      "mining_alpha_net": 1621.33650721,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-01",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450766766,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.66349279,
+      "mining_alpha_net": 1621.33650721,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-02",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450766766,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.66349279,
+      "mining_alpha_net": 1621.33650721,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-03",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450644694,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.303135729,
+      "mining_alpha_net": 1621.696864271,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-04",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450583658,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.122957198,
+      "mining_alpha_net": 1621.877042802,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-05",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450583658,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.122957198,
+      "mining_alpha_net": 1621.877042802,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-06",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450583658,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.122957198,
+      "mining_alpha_net": 1621.877042802,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-07",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450598917,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.168001831,
+      "mining_alpha_net": 1621.831998169,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-08",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450598917,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.168001831,
+      "mining_alpha_net": 1621.831998169,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-09",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.450598917,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1330.168001831,
+      "mining_alpha_net": 1621.831998169,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-10",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.451224537,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1332.014831769,
+      "mining_alpha_net": 1619.985168231,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-11",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.451239796,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1332.059876402,
+      "mining_alpha_net": 1619.940123598,
+      "observed_burn": true
+    },
+    {
+      "date": "2026-08-12",
+      "source": "incentive_burn_estimate",
+      "incentive_burn": 0.451255055,
+      "mining_alpha_gross": 2952.0,
+      "mining_alpha_burned": 1332.104921035,
+      "mining_alpha_net": 1619.895078965,
+      "observed_burn": true
+    }
+  ]
+}
