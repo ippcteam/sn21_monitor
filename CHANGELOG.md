@@ -2,6 +2,19 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-08-12 — Durable miner-payout ledger since go-live
+
+### Added
+- **`miner_payouts_sync.py` + `data/miner_payouts_daily.json`** — one compact
+  row per UTC day (gross / burned / net miner α, `incentive_burn`, prices).
+  Not pruned; answers “how much α have miners been paid since go-live?”.
+- **Go-live seed** `seeds/miner_payouts_since_2026-05-27.json` — backfill from
+  2026-05-27 using Taostats `incentive_burn` history (~66.7k α net through
+  2026-08-12). Merged onto `/data` at startup; never overwrites live
+  `source=metagraph` rows.
+- **Daily job 09:02 UTC** + `GET/POST /api/miner-payouts` — capture today from
+  metagraph `burn_summary` and expose cumulative / daily series.
+
 ## 2026-07-29 — Emission gate: read q/h/θ instead of fitting them
 
 ### Fixed
