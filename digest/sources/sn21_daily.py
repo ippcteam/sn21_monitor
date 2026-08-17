@@ -39,10 +39,13 @@ MARKET_STORE = DATA_DIR / "subnets_market.json"
 
 RAO_PER_TAO = 1_000_000_000
 
-# Names worth flagging as "validator brand" exits.
+# Names worth collapsing as one operator. These rotate coldkeys weekly;
+# they are not narrated unless the move is both directional and large.
 KNOWN_BRANDS = {
     "taostats",
     "tao.bot",
+    "tao5",
+    "tao.com",
     "1t1b",
     "1t1b.ai",
     "datura",
@@ -54,6 +57,9 @@ KNOWN_BRANDS = {
     "yuma",
     "crucible",
     "love",
+    "tensorplex",
+    "kraken",
+    "arbos",
 }
 
 # Threshold for "notable exit" (in alpha). Anything ≥ 1000 alpha or ≥ 5 τ-equiv.
@@ -71,10 +77,22 @@ TOP_MOVERS_PER_WINDOW = 10
 # *brand* (falling back to coldkey) and judge on NET position change, not gross.
 NET_FLOW_MIN_ALPHA = 2000.0       # |net| over the window to count as a real move
 ROTATION_GROSS_MIN_ALPHA = 3000.0  # gross churn that, with small net, = rotation
-HOUSE_NET_MIN_ALPHA = 500.0       # |net| house move worth flagging
+NET_GROSS_RATIO_MIN = 0.6         # |net|/gross below this is coldkey rotation
+KNOWN_BRAND_NET_MIN_ALPHA = 8000.0  # known brands need a larger net to headline
+HOUSE_NET_MIN_ALPHA = 500.0       # |net| house 24h move worth flagging
 TOP_NET_MOVERS = 6                 # cap on net movers surfaced to the narrator
-# A regime is "full burn-to-owner" at/above this burn rate; below it miners earn.
+# Standing owner policy (2026-07-31): burn held at 0.451. Not a daily event.
+BURN_SETPOINT_PCT = 45.1
+BURN_MOVE_FLAG_PP = 3.0           # flag only if burn moved this many pp
 FULL_BURN_THRESHOLD_PCT = 99.5
+# Tape (24h AMM) — already in subnet_daily.pool from the 08:30 Taostats sync.
+TAPE_THIN_TAO = 8.0               # buy+sell τ below this is a thin day
+TAPE_NET_TAO_FLAG = 5.0           # |net τ| large enough to raise a flag
+TAPE_IMBALANCE_RATIO = 1.1        # buy vs sell volume to call a winner
+SENTIMENT_EXTREME_LOW = 25
+SENTIMENT_EXTREME_HIGH = 75
+SENTIMENT_SWING_7D = 15
+VOLUME_DRYUP_7D_PCT = -40.0
 
 
 def _pct(today: float | int | None, prior: float | int | None) -> float | None:
@@ -169,6 +187,23 @@ def _label_brand(name: str | None) -> str | None:
         if brand in nl:
             return brand
     return None
+
+
+def _is_known_brand(brand: str | None, name: str | None) -> bool:
+    blob = f"{brand or ''} {name or ''}".lower()
+    return any(b in blob for b in KNOWN_BRANDS)
+
+
+def _is_real_net_move(net: float, gross: float, brand: str | None,
+                      name: str | None) -> bool:
+    """True only for directional capital, not coldkey rotation."""
+    if abs(net) < NET_FLOW_MIN_ALPHA or gross <= 0:
+        return False
+    if abs(net) / gross < NET_GROSS_RATIO_MIN:
+        return False
+    if _is_known_brand(brand, name) and abs(net) < KNOWN_BRAND_NET_MIN_ALPHA:
+        return False
+    return True
 
 
 # ── Section builders ──────────────────────────────────────────────────────────
@@ -506,6 +541,18 @@ def _trends_section(subnet_log: list[dict], daily_log: list[dict],
         subnet_log,
         lambda r: ((r or {}).get("pool") or {}).get("alpha_sell_volume_24h"),
     )
+    out["tao_buy_volume_24h"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("tao_buy_volume_24h"),
+    )
+    out["tao_sell_volume_24h"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("tao_sell_volume_24h"),
+    )
+    out["fear_greed_index"] = _trend_row(
+        subnet_log,
+        lambda r: ((r or {}).get("pool") or {}).get("fear_and_greed_index"),
+    )
 
     # Burn rate — neurons_daily series, fall back to subnet incentive_burn ×100
     def _burn_x(r: dict | None) -> float | None:
@@ -642,14 +689,14 @@ def _coldkey_movers_window(snapshots: list[dict], window_days: int,
 
 def _flow_group_key(brand: str | None, name: str | None, coldkey: str | None) -> str:
     """
-    Collapse a validator's coldkey rotation onto one row. Group by the operator's
-    display NAME (so two coldkeys both named e.g. "Tensorplex Labs" net out even
-    when the name isn't in KNOWN_BRANDS), then by known brand, then by coldkey.
+    Collapse a validator's coldkey rotation onto one row. Known brand first
+    (so "Taostats" and "Taostats 2" net out), then exact display name, then
+    coldkey.
     """
-    if name and name.strip():
-        return f"name:{name.strip().lower()}"
     if brand:
         return f"brand:{brand}"
+    if name and name.strip():
+        return f"name:{name.strip().lower()}"
     return f"ck:{coldkey or ''}"
 
 
@@ -729,18 +776,18 @@ def _flows_section(snapshots: list[dict], house: set[str], movers: dict) -> dict
         gross = g["gross_alpha"]
         d24 = grp_24h.get(key) or {}
         net24 = d24.get("net_alpha") or 0.0
-        if abs(net) >= NET_FLOW_MIN_ALPHA:
+        ratio = (abs(net) / gross) if gross else 0.0
+        if _is_real_net_move(net, gross, g.get("brand"), g.get("name")):
             net_movers.append({
                 "name": g["name"],
                 "brand": g["brand"],
                 "net_alpha_7d": round(net, 2),
                 "net_alpha_24h": round(net24, 2),
+                "net_gross_ratio": round(ratio, 2),
                 "direction": "in" if net > 0 else "out",
-                # Still moving the same way today → a real trend, not a one-off.
-                "sustained": (net > 0) == (net24 > 0) and abs(net24) > 0,
                 "coldkeys": g["coldkeys"],
             })
-        elif gross >= ROTATION_GROSS_MIN_ALPHA:
+        elif gross >= ROTATION_GROSS_MIN_ALPHA or abs(net) >= NET_FLOW_MIN_ALPHA:
             rotation_names.append(g["name"])
 
     net_movers.sort(key=lambda m: abs(m["net_alpha_7d"]), reverse=True)
@@ -773,14 +820,32 @@ def _owner_economics_section(emissions: dict, owner: dict, burn: dict,
     entitled = (trends.get("our_entitled_alpha") or {})
     owner_share = (trends.get("owner_share_alpha") or {})
     burn_pct = burn.get("burn_rate_pct")
+    burn_d7 = (trends.get("burn_rate_pct") or {}).get("d-7")
+    burn_7d_pp = None
+    if burn_pct is not None and burn_d7 is not None:
+        try:
+            burn_7d_pp = round(float(burn_pct) - float(burn_d7), 2)
+        except (TypeError, ValueError):
+            burn_7d_pp = None
     regime = None
     miner_share = None
+    burn_vs_setpoint_pp = None
     if burn_pct is not None:
-        if burn_pct >= FULL_BURN_THRESHOLD_PCT:
-            regime = "full burn-to-owner"
-        else:
-            miner_share = round(100.0 - burn_pct, 2)
-            regime = f"miners earning ~{miner_share:.1f}% (off full burn-to-owner)"
+        try:
+            bp = float(burn_pct)
+            burn_vs_setpoint_pp = round(bp - BURN_SETPOINT_PCT, 2)
+            miner_share = round(100.0 - bp, 2)
+            if abs(burn_vs_setpoint_pp) < 1.0:
+                regime = f"setpoint {BURN_SETPOINT_PCT:.1f}%"
+            elif bp >= FULL_BURN_THRESHOLD_PCT:
+                regime = "full burn-to-owner"
+            else:
+                regime = (
+                    f"miners earning ~{miner_share:.1f}% "
+                    f"(off setpoint {BURN_SETPOINT_PCT:.1f}%)"
+                )
+        except (TypeError, ValueError):
+            pass
     return {
         "entitled_alpha_today": emissions.get("our_entitled_alpha"),
         "entitled_7d_pct": entitled.get("7d_pct"),
@@ -792,8 +857,11 @@ def _owner_economics_section(emissions: dict, owner: dict, burn: dict,
         "wallet_balance_tao": owner.get("balance_total_tao"),
         "wallet_change_24h_pct": owner.get("balance_change_24h_pct"),
         "burn_rate_pct": burn_pct,
+        "burn_setpoint_pct": BURN_SETPOINT_PCT,
+        "burn_vs_setpoint_pp": burn_vs_setpoint_pp,
         "burn_regime": regime,
         "miner_share_pct": miner_share,
+        "burn_7d_pp": burn_7d_pp,
         "burn_7d_pct_change": (trends.get("burn_rate_pct") or {}).get("7d_pct"),
         "next_tier_date": tier.get("next_tier_date"),
         "days_to_next_tier": tier.get("days_to_next_tier"),
@@ -802,17 +870,108 @@ def _owner_economics_section(emissions: dict, owner: dict, burn: dict,
     }
 
 
+# ── 24h AMM tape (Taostats pool: sentiment + buy/sell counts + τ volume) ─────
+
+def _tape_section(subnet_log: list[dict], trends: dict) -> dict[str, Any]:
+    """
+    Daily pulse from the pool row already written at 08:30. Pre-computes a
+    verdict so the narrator cannot invent one.
+    """
+    if not subnet_log:
+        return {"available": False}
+    pool = (subnet_log[-1] or {}).get("pool") or {}
+    if not pool:
+        return {"available": False}
+
+    buy_tao = pool.get("tao_buy_volume_24h")
+    sell_tao = pool.get("tao_sell_volume_24h")
+    buys = pool.get("buys_24h")
+    sells = pool.get("sells_24h")
+    sent = pool.get("fear_and_greed_index")
+    sent_label = pool.get("fear_and_greed_sentiment")
+
+    net_tao = None
+    total_tao = None
+    try:
+        if buy_tao is not None and sell_tao is not None:
+            net_tao = round(float(buy_tao) - float(sell_tao), 4)
+            total_tao = float(buy_tao) + float(sell_tao)
+    except (TypeError, ValueError):
+        net_tao = None
+        total_tao = None
+
+    verdict = "unknown"
+    if total_tao is not None:
+        if total_tao < TAPE_THIN_TAO:
+            verdict = "thin"
+        elif buy_tao is not None and sell_tao is not None:
+            if float(buy_tao) > float(sell_tao) * TAPE_IMBALANCE_RATIO:
+                verdict = "buy_won"
+            elif float(sell_tao) > float(buy_tao) * TAPE_IMBALANCE_RATIO:
+                verdict = "sell_won"
+            else:
+                verdict = "balanced"
+
+    count_vs_volume = None
+    try:
+        if buys is not None and sells is not None and buy_tao is not None and sell_tao is not None:
+            if int(sells) > int(buys) and float(buy_tao) > float(sell_tao):
+                count_vs_volume = "more_sells_buy_won"
+            elif int(buys) > int(sells) and float(sell_tao) > float(buy_tao):
+                count_vs_volume = "more_buys_sell_won"
+    except (TypeError, ValueError):
+        count_vs_volume = None
+
+    plain = {
+        "buy_won": "Buy volume won the day.",
+        "sell_won": "Sell volume won the day.",
+        "balanced": "Tape roughly balanced.",
+        "thin": "Thin tape — low TAO volume.",
+        "unknown": "Tape incomplete.",
+    }[verdict]
+    if count_vs_volume == "more_sells_buy_won":
+        plain = "More sellers, larger buys — buy volume won."
+    elif count_vs_volume == "more_buys_sell_won":
+        plain = "More buyers, larger sells — sell volume won."
+
+    sent_7d_delta = None
+    prior_sent = (trends.get("fear_greed_index") or {}).get("d-7")
+    if sent is not None and prior_sent is not None:
+        try:
+            sent_7d_delta = round(float(sent) - float(prior_sent), 1)
+        except (TypeError, ValueError):
+            sent_7d_delta = None
+
+    return {
+        "available": True,
+        "sentiment_index": sent,
+        "sentiment_label": sent_label,
+        "sentiment_7d_delta": sent_7d_delta,
+        "buys_24h": buys,
+        "sells_24h": sells,
+        "buyers_24h": pool.get("buyers_24h"),
+        "sellers_24h": pool.get("sellers_24h"),
+        "tao_buy_volume_24h": buy_tao,
+        "tao_sell_volume_24h": sell_tao,
+        "net_tao_24h": net_tao,
+        "tao_buy_volume_7d_pct": (trends.get("tao_buy_volume_24h") or {}).get("7d_pct"),
+        "tao_sell_volume_7d_pct": (trends.get("tao_sell_volume_24h") or {}).get("7d_pct"),
+        "verdict": verdict,
+        "verdict_plain": plain,
+        "count_vs_volume": count_vs_volume,
+    }
+
+
 # ── Flags / risks the LLM should weight ──────────────────────────────────────
 
-def _flags(price: dict, flows: dict, owner_econ: dict, market: dict | None = None) -> list[str]:
+def _flags(price: dict, flows: dict, owner_econ: dict,
+           market: dict | None = None, tape: dict | None = None) -> list[str]:
     """
-    Only material, non-recurring signals. Crucially uses NET (not gross) flows so
-    routine validator rotation and daily stake oscillation no longer fire a flag
-    every single day.
+    Only material, non-recurring signals. Standing setpoints (burn at 45.1%,
+    entitled α flat at 324) do not fire.
     """
     flags: list[str] = []
 
-    # Market-relative context: distinguish a real SN21 problem from a market-wide move.
     if market and market.get("available"):
         verdict = market.get("verdict")
         b = market.get("breadth") or {}
@@ -823,30 +982,42 @@ def _flags(price: dict, flows: dict, owner_econ: dict, market: dict | None = Non
                 f"(move pctile {s.get('move_24h_percentile')}) while the market held "
                 f"(median {b.get('median_move_24h_tao_pct')}% in TAO)"
             )
-        elif verdict == "market_wide":
-            flags.append(
-                f"Market-wide move (not SN21-specific): {b.get('pct_up_24h')}% of subnets up, "
-                f"median {b.get('median_move_24h_tao_pct')}% in TAO; SN21 in line"
-            )
 
-    # Owner accrual — the metric that actually matters for an owned subnet.
     e7 = owner_econ.get("entitled_7d_pct")
     if e7 is not None and e7 <= -2:
         flags.append(f"Owner accrual slipping: entitled α {e7:.2f}% over 7d")
 
-    # Burn regime change away from full burn-to-owner.
-    if owner_econ.get("miner_share_pct") is not None:
-        flags.append(
-            f"Burn at {owner_econ.get('burn_rate_pct'):.2f}% — off full burn-to-owner; "
-            f"miners receiving ~{owner_econ['miner_share_pct']:.1f}%"
-        )
+    # Burn: only a move away from the 45.1% setpoint, not the standing level.
+    burn_pct = owner_econ.get("burn_rate_pct")
+    vs_set = owner_econ.get("burn_vs_setpoint_pp")
+    moved = owner_econ.get("burn_7d_pp")
+    if burn_pct is not None and vs_set is not None and moved is not None:
+        if abs(vs_set) >= BURN_MOVE_FLAG_PP and abs(moved) >= BURN_MOVE_FLAG_PP:
+            flags.append(
+                f"Burn moved {moved:+.1f}pp in 7d to {float(burn_pct):.2f}% "
+                f"(setpoint {BURN_SETPOINT_PCT:.1f}%)"
+            )
 
-    # House NET (not gross) outflow.
+    if tape and tape.get("available"):
+        net_tao = tape.get("net_tao_24h")
+        if net_tao is not None and abs(float(net_tao)) >= TAPE_NET_TAO_FLAG:
+            flags.append(f"Tape net {float(net_tao):+.2f} τ in 24h")
+        sent = tape.get("sentiment_index")
+        if sent is not None and (float(sent) <= SENTIMENT_EXTREME_LOW
+                                 or float(sent) >= SENTIMENT_EXTREME_HIGH):
+            label = tape.get("sentiment_label") or ""
+            flags.append(f"Sentiment extreme: {float(sent):.0f} {label}".rstrip())
+        sent_7d = tape.get("sentiment_7d_delta")
+        if sent_7d is not None and abs(float(sent_7d)) >= SENTIMENT_SWING_7D:
+            flags.append(f"Sentiment swung {float(sent_7d):+.0f} over 7d")
+        buy_7d = tape.get("tao_buy_volume_7d_pct")
+        if buy_7d is not None and float(buy_7d) <= VOLUME_DRYUP_7D_PCT:
+            flags.append(f"Buy volume dry-up: {float(buy_7d):.0f}% over 7d")
+
     if flows.get("available"):
-        h_net = flows.get("house_net_alpha_7d")
+        h_net = flows.get("house_net_alpha_24h")
         if h_net is not None and h_net <= -HOUSE_NET_MIN_ALPHA:
-            flags.append(f"House net outflow {h_net:.0f} α over 7d (net, not rotation)")
-        # Real net distribution by a non-house holder/brand.
+            flags.append(f"House net outflow {h_net:.0f} α over 24h (net, not rotation)")
         big_out = [m for m in (flows.get("net_movers") or [])
                    if m["direction"] == "out" and abs(m["net_alpha_7d"]) >= NET_FLOW_MIN_ALPHA * 2]
         if big_out:
@@ -923,6 +1094,7 @@ def gather() -> dict[str, Any]:
     flows = _flows_section(snapshots, house, movers)
     # Owner economics — promoted to a first-class block the narrator leads with.
     owner_economics = _owner_economics_section(emissions, owner, burn, tier, trends)
+    tape = _tape_section(subnet_log, trends)
 
     # If subnet_log carries TAO USD via the daily log fallback, fold it in.
     if price.get("tao_price_usd") is None and daily_log:
@@ -944,6 +1116,7 @@ def gather() -> dict[str, Any]:
         "owner_economics": owner_economics,
         "market": market,
         "price": price,
+        "tape": tape,
         "flows": flows,
         "pool": pool,
         "movers": movers,
@@ -955,5 +1128,5 @@ def gather() -> dict[str, Any]:
         "stale_fields": stale,
     }
     out.update(window_movers)  # movers_7d, movers_30d
-    out["flags"] = _flags(price, flows, owner_economics, market)
+    out["flags"] = _flags(price, flows, owner_economics, market, tape)
     return out

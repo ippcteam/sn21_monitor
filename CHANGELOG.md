@@ -2,6 +2,19 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-08-17 — Daily digest: tape in, burn-collapse out
+
+### Changed
+- **SN21 daily Telegram** now leads with the 24h AMM tape already stored in
+  `subnet_daily.json` (Taostats sentiment, buy/sell counts, unique
+  counterparties, buy/sell τ, net τ). No new fetch.
+- **Burn at 45.1% is a setpoint**, not a daily emergency. Flags fire only when
+  burn moves ≥3 pp vs last week *and* vs the 31 Jul policy. Entitled α of 324
+  stays quiet while it is flat.
+- **Flows** require `|net|/gross ≥ 0.6`. Known validator brands (Taostats,
+  tao.bot, Tensorplex, …) need ≥8k α net to headline. House is 24h only.
+  The `SUSTAINED` tag is gone.
+
 ## 2026-08-12 — Durable miner-payout ledger since go-live
 
 ### Added
