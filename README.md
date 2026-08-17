@@ -176,6 +176,12 @@ Adding a new digest = drop a source module, add a prompt, append a
 `DigestConfig` in `app.py`. See `.env.example` for required env vars
 (Telegram bot + Anthropic key).
 
+The SN21 daily is value-first: **OWNER** (324 α/day entitlement + pool +
+burn-as-setpoint) then **TAPE** (Taostats sentiment + 24h buy/sell counts
+and τ volume, already in `subnet_daily.json`) then market-relative price.
+Validator coldkey rotation is stripped before the narrator sees it. Burn
+at 45.1% is the standing policy — it is not re-announced every morning.
+
 **Memory.** Each digest's last 30 sent texts persist in
 `digest_archive_<kind>.json`. On every compose the prior days (excluding
 today) are passed to the LLM as a `=== PRIOR DIGESTS ===` block so it
