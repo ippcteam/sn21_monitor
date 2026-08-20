@@ -22,6 +22,7 @@ from typing import Any
 from collector import load_json
 from config import DAILY_LOG
 from neurons_daily_sync import NEURONS_DAILY_STORE
+from neurons_sync import is_mining_role, is_validating_role
 from windows import date_in_weekly_window, previous_weekly_window, weekly_window
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,8 @@ def _summarise_window(
         if date_in_weekly_window(e.get("date") or "", start_et, end_et)
     ]
 
-    house_miners = [r for r in in_week_rows if r.get("is_house") and not r.get("validator_permit")]
-    house_vals   = [r for r in in_week_rows if r.get("is_house") and r.get("validator_permit")]
-    all_miners   = [r for r in in_week_rows if not r.get("validator_permit")]
+    house_miners = [r for r in in_week_rows if r.get("is_house") and is_mining_role(r)]
+    house_vals   = [r for r in in_week_rows if r.get("is_house") and is_validating_role(r)]
 
     miner_gross  = sum((r.get("daily_mining_alpha") or 0.0) for r in house_miners)
     miner_burned = sum((r.get("daily_burned_alpha") or 0.0) for r in house_miners)
@@ -72,9 +72,10 @@ def _summarise_window(
             for r in in_week_rows if r.get("is_owner_hotkey")
         )
 
-    # Subnet-wide burn rate over the week (alpha-weighted).
-    total_mining_gross  = sum((r.get("daily_mining_alpha") or 0.0) for r in all_miners)
-    total_mining_burned = sum((r.get("daily_burned_alpha") or 0.0) for r in all_miners)
+    # Subnet-wide burn rate over the week (alpha-weighted). Sum every UID —
+    # same rule as burn_summary. The burn sink can hold a permit.
+    total_mining_gross  = sum((r.get("daily_mining_alpha") or 0.0) for r in in_week_rows)
+    total_mining_burned = sum((r.get("daily_burned_alpha") or 0.0) for r in in_week_rows)
     burn_rate = (
         round(total_mining_burned / total_mining_gross, 6)
         if total_mining_gross > 0 else None

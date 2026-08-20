@@ -7,6 +7,10 @@ incentive, dividends, emission, daily_mining_alpha, daily_burned_alpha,
 daily_validating_alpha, daily_owner_alpha (+ *_as_tao), axon, updated,
 registered_at_block, is_owner_hotkey, is_child_key, is_immunity_period.
 
+Tables split by live role, not permit: a UID is a validator if it has vTrust,
+dividends, or daily validating α; a miner if it has incentive / mining α, or
+is idle and not validating. Permit-only miners (e.g. UID 154) stay miners.
+
 `updated` = blocks since the UID last set weights / served. Combined with the
 mining/validation window from windows.py, we mark each UID "submitting in
 current window" or not.
@@ -155,7 +159,7 @@ def _normalise_row(
         if (daily_mining_alpha is not None or daily_burned_alpha is not None)
         else None
     )
-    return {
+    row = {
         "uid": r.get("uid"),
         "hotkey": hotkey,
         "hotkey_short": _short(hotkey),
@@ -200,6 +204,48 @@ def _normalise_row(
         "registered_at_block": r.get("registered_at_block"),
         "submitting_in_window": submitting,
     }
+    row["role"] = neuron_role(row)
+    return row
+
+
+def is_validating_role(n: dict[str, Any]) -> bool:
+    """True if the UID is actually validating — not merely stake-permitted.
+
+    `validator_permit` is top-64-by-stake. House miner UID 154 holds a permit
+    (~1.7k α) but has 0 vTrust / 0 dividends and takes miner incentive.
+    """
+    return (
+        (n.get("validator_trust") or 0) > 0
+        or (n.get("dividends") or 0) > 0
+        or (n.get("daily_validating_alpha") or 0) > 0
+    )
+
+
+def is_mining_role(n: dict[str, Any]) -> bool:
+    """True if the UID is mining, or is idle and not validating.
+
+    Incentive / daily mining α are the positive signals. UIDs with neither
+    mining nor validating signals default to miner (registered, not validating)
+    so house miners at 0 incentive (UID 1) stay in the miners table.
+    """
+    if (n.get("incentive") or 0) > 0:
+        return True
+    if (n.get("daily_mining_alpha") or 0) > 0:
+        return True
+    if (n.get("daily_mining_alpha_net") or 0) > 0:
+        return True
+    return not is_validating_role(n)
+
+
+def neuron_role(n: dict[str, Any]) -> str:
+    """'validator' | 'miner' | 'dual' from live role signals."""
+    validating = is_validating_role(n)
+    mining = is_mining_role(n)
+    if validating and mining:
+        return "dual"
+    if validating:
+        return "validator"
+    return "miner"
 
 
 def burn_summary(neurons: list[dict[str, Any]]) -> dict[str, Any]:
@@ -226,7 +272,8 @@ def burn_summary(neurons: list[dict[str, Any]]) -> dict[str, Any]:
 def fetch_neurons() -> dict[str, Any]:
     """
     Pull fresh metagraph snapshot (cached 60 s), classify into validators and
-    miners, mark each with submitting_in_window for the active window.
+    miners by live role (not validator_permit), mark each with
+    submitting_in_window for the active window. Dual UIDs appear in both lists.
     """
     now = _time.time()
     with _cache_lock:
@@ -264,8 +311,8 @@ def fetch_neurons() -> dict[str, Any]:
         for r in rows
     ]
 
-    validators = [n for n in normalised if n["validator_permit"]]
-    miners = [n for n in normalised if not n["validator_permit"]]
+    validators = [n for n in normalised if is_validating_role(n)]
+    miners = [n for n in normalised if is_mining_role(n)]
 
     validators.sort(key=lambda n: (-(n.get("daily_validating_alpha") or 0.0), n["uid"]))
     miners.sort(key=lambda n: (-(n.get("incentive") or 0.0), -(n.get("daily_mining_alpha") or 0.0), n["uid"]))

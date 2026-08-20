@@ -15,6 +15,9 @@ Storage: data/neurons_daily.json
         "uid": int, "hotkey": str, "coldkey": str,
         "is_house": bool, "validator_permit": bool, "is_owner_hotkey": bool,
         "active": bool, "submitting_in_window": bool|None,
+        "role": "miner"|"validator"|"dual",
+        "incentive": float|None, "dividends": float|None,
+        "validator_trust": float|None,
         "daily_mining_alpha": float|None,
         "daily_mining_alpha_net": float|None,
         "daily_burned_alpha": float|None,
@@ -67,7 +70,12 @@ def sync_neurons_daily() -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     block = payload.get("block_number")
+    seen: set[Any] = set()
     for n in (payload.get("validators") or []) + (payload.get("miners") or []):
+        uid = n.get("uid")
+        if uid in seen:
+            continue
+        seen.add(uid)
         rows.append({
             "date": date_str,
             "fetched_at_utc": fetched_at.isoformat(),
@@ -75,12 +83,16 @@ def sync_neurons_daily() -> dict[str, Any]:
             "alpha_price_tao": prices["alpha_price_tao"],
             "alpha_price_usd": prices["alpha_price_usd"],
             "tao_price_usd": prices["tao_price_usd"],
-            "uid": n.get("uid"),
+            "uid": uid,
             "hotkey": n.get("hotkey"),
             "coldkey": n.get("coldkey"),
             "is_house": bool(n.get("is_house")),
             "is_owner_hotkey": bool(n.get("is_owner_hotkey")),
             "validator_permit": bool(n.get("validator_permit")),
+            "role": n.get("role"),
+            "incentive": n.get("incentive"),
+            "dividends": n.get("dividends"),
+            "validator_trust": n.get("validator_trust"),
             "active": bool(n.get("active")),
             "submitting_in_window": n.get("submitting_in_window"),
             "daily_mining_alpha": n.get("daily_mining_alpha"),
