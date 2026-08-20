@@ -754,12 +754,12 @@
       <span style="margin-left:auto;color:var(--muted)">Click ☆/★ in the House column to mark/unmark.</span>
     </div>
 
-    <div class="section-label">Validators · Validation Window <span id="valWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="section-label">Validators · actually validating <span id="valWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
     <div class="table-card" id="validatorsTable">
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
 
-    <div class="section-label">Miners · Mining Window <span id="minerWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="section-label">Miners · actually mining <span id="minerWindowMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
     <div class="table-card" id="minersTable">
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
@@ -2875,7 +2875,7 @@ function renderValidatorsTable(rows, w) {
           ${rows.map(v => `
             <tr>
               <td>${houseToggleHtml(v)}</td>
-              <td class="uid">${v.uid}${v.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${v.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}</td>
+              <td class="uid">${v.uid}${v.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${v.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}${v.role === 'dual' ? ' <span class="house-chip">DUAL</span>' : ''}</td>
               <td class="mono">${fmtAlpha(v.total_alpha_stake, 2)}</td>
               <td class="em">${fmtAlpha(v.daily_validating_alpha, 4)}</td>
               <td class="mono">${fmtAlpha(v.daily_reward_tao, 4)}</td>
@@ -2920,7 +2920,7 @@ function renderMinersTable(rows, w) {
             const net = (m.daily_mining_alpha_net != null) ? m.daily_mining_alpha_net : (gross - burn);
             return `<tr>
               <td>${houseToggleHtml(m)}</td>
-              <td class="uid">${m.uid}${m.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${m.is_immunity_period ? ' <span style="color:var(--blue-lt);font-size:0.6rem">IMM</span>' : ''}${m.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}</td>
+              <td class="uid">${m.uid}${m.is_owner_hotkey ? ' <span style="color:var(--amber);font-size:0.6rem">★OWNER</span>' : ''}${m.is_immunity_period ? ' <span style="color:var(--blue-lt);font-size:0.6rem">IMM</span>' : ''}${m.is_house ? ' <span class="house-chip">HOUSE</span>' : ''}${m.role === 'dual' ? ' <span class="house-chip">DUAL</span>' : ''}${m.validator_permit && m.role !== 'validator' ? ' <span class="house-chip" title="Stake permit only — not validating">PERMIT</span>' : ''}</td>
               <td class="em">${fmtPct((m.incentive || 0) * 100, 4)}%</td>
               <td class="mono">${fmtAlpha(gross, 4)}</td>
               <td class="mono" style="color:var(--red)">${fmtAlpha(burn, 4)}</td>

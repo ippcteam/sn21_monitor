@@ -20,7 +20,7 @@ movements, and burn-aware weekly earnings.
 |-----|---------------|
 | **Home** | Live metrics (owner pool 18%, our entitlement, alpha price, TAO price, wallet balance/USD) · **House Earnings · Current Mining Week** (miners net + gross, validators, owner key, burn pill) · 5-week stacked weekly chart · trend charts · active UID table |
 | **Activity** | Subnet 24h pool volumes (buy/sell), holder count, burn rate, active validator/miner counts · 30-day trend charts |
-| **Neurons** | All 256 SN21 UIDs split into validators / miners, with mining/validation window detection (Mon 12:00 ET → following Mon 12:00 ET), submitting-in-window flag, and **House toggle column** (☆/★) plus All/House/Other filter pills |
+| **Neurons** | All 256 SN21 UIDs split by **live role** (vTrust/dividends/validating α vs incentive/mining α — not `validator_permit`), with mining/validation window detection (Mon 12:00 ET → following Mon 12:00 ET), submitting-in-window flag, and **House toggle column** (☆/★) plus All/House/Other filter pills |
 | **Validators** | On-chain weight-copy scan: burn-status banner, per-validator scoring breadth, vTrust, stake%, cosine-to-consensus, and copy verdict (copier vs independent, with source guess) · **Our validator wallet identification** (coldkey→stake breakdown for UID 64, cross-checked against on-chain `TotalHotkeyAlpha`) |
 | **Movement** | Our owner-coldkey alpha balance over time · 24h holder movers (top inflows/outflows, NEW/EXITED/BOUGHT/SOLD), with House column and house/other split in the summary |
 
