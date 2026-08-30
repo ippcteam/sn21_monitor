@@ -768,6 +768,18 @@
   <!-- ───────────── VALIDATORS TAB ───────────── -->
   <section class="tab-panel" data-panel="validators">
     <div class="section-label">
+      Named operators · SN21 in basket
+      <span id="basketMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerBasketSync()" title="Taostats validator/available for netuid 21 (~2s)">Sync now (~2s)</button>
+    </div>
+    <div class="cards-grid" id="basketCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+    <div class="table-card" id="basketTable" style="margin-top:0.75rem">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">
       Validator Scoring · Weight-Copy Scan
       <span id="weightsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
       <button class="btn-sm" style="margin-left:auto" onclick="triggerWeightsScan()" title="Read every validator's weight vector from chain (~30s)">Scan now (~30s)</button>
@@ -779,6 +791,19 @@
 
     <div class="section-label">Validators · Weight Vectors</div>
     <div class="table-card" id="weightsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">
+      Root baskets · SN21 holdings
+      <span id="rootBasketsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerRootBasketsScan()" title="Read every root fund via BetaBasketRuntimeApi (~5s)">Scan now (~5s)</button>
+    </div>
+    <div id="rootBasketsBanner" class="alert-banner" style="margin-top:0.75rem"></div>
+    <div class="cards-grid" id="rootBasketsCards">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+    <div class="table-card" id="rootBasketsTable" style="margin-top:0.75rem">
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
 
@@ -1655,6 +1680,86 @@ async function init() {
 /* ── Validators tab (weight-copy / burn scan + wallet identification) ─── */
 let _weightsScan = null;
 
+async function triggerBasketSync() {
+  const btn = event && event.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  try {
+    await fetch('/api/validator-basket/sync', { method: 'POST' });
+    await loadValidatorBasket();
+  } catch (e) {
+    console.error('basket sync failed', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync now (~2s)'; }
+  }
+}
+
+function basketDelta(v) {
+  if (v == null) return '<span style="color:var(--muted)">—</span>';
+  const c = v > 0 ? 'var(--green)' : (v < 0 ? 'var(--red)' : 'var(--muted)');
+  const s = v > 0 ? '+' : '';
+  return `<span style="color:${c}">${s}${fmtAlpha(v, 2)}</span>`;
+}
+
+async function loadValidatorBasket() {
+  const cardsEl = document.getElementById('basketCards');
+  const tableEl = document.getElementById('basketTable');
+  const meta = document.getElementById('basketMeta');
+  try {
+    const r = await fetch('/api/validator-basket');
+    const d = await r.json();
+    if (d.error) {
+      cardsEl.innerHTML = '';
+      tableEl.innerHTML = `<div class="no-data"><strong>${d.error}</strong>
+        <span>One Taostats call lists named operators with SN21 α on their hotkey.
+        <button class="btn-sm" onclick="triggerBasketSync()">Sync now</button></span></div>`;
+      return;
+    }
+    const s = d.summary || {};
+    meta.textContent = ' · ' + (d.fetched_at_utc || '').replace('T',' ').slice(0,16) + ' UTC'
+      + (d.holders_joined ? ' · nominators joined' : '');
+    const entered = (s.entered_names || []).join(', ') || 'none';
+    const exited = (s.exited_names || []).join(', ') || 'none';
+    const cards = [
+      { label: 'Named operators', value: s.named_count, unit: `/ ${s.validator_count} hotkeys`, accent: '#2563EB' },
+      { label: 'Basket α', value: fmtInt(Math.round(s.total_alpha || 0)), unit: `${fmtInt(Math.round(s.named_alpha || 0))} named`, accent: '#10B981' },
+      { label: 'Entered (24h)', value: s.entered_count || 0, unit: entered, accent: '#F59E0B' },
+      { label: 'Exited (24h)', value: s.exited_count || 0, unit: exited, accent: '#EF4444' },
+    ];
+    cardsEl.innerHTML = cards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+      </div>`).join('');
+
+    const live = d.validators || [];
+    const gone = d.exited || [];
+    const rows = [...live, ...gone].map(v => {
+      const oursTag = v.is_ours ? ' <span class="house-chip">OURS</span>' : '';
+      const houseChip = (v.is_house && !v.is_ours) ? ' <span class="house-chip">HOUSE</span>' : '';
+      const newChip = v.is_new ? ' <span class="house-chip" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.4);color:#34D399">NEW</span>' : '';
+      const exitChip = v.is_exited ? ' <span class="house-chip" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4);color:#F87171">EXITED</span>' : '';
+      const nameText = v.name || `<span style="color:var(--muted)">${v.hotkey_short || '—'}</span>`;
+      const name = keyText(v.hotkey, nameText, 'Validator hotkey');
+      const rowStyle = v.is_ours ? ' style="background:rgba(245,158,11,0.05)"'
+        : (v.is_exited ? ' style="opacity:0.65"' : '');
+      return `<tr${rowStyle}>
+        <td>${name}${oursTag}${houseChip}${newChip}${exitChip}</td>
+        <td class="mono">${fmtAlpha(v.alpha, 2)}</td>
+        <td class="mono">${v.share_pct != null && !v.is_exited ? v.share_pct.toFixed(2)+'%' : '—'}</td>
+        <td class="mono">${v.nominators != null ? fmtInt(v.nominators) : '—'}</td>
+        <td class="mono">${basketDelta(v.alpha_delta)}</td>
+      </tr>`;
+    }).join('');
+    tableEl.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Operator</th><th>Alpha (α)</th><th>Share</th><th>Nominators</th><th>24h Δ</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } catch (e) {
+    console.error(e);
+    tableEl.innerHTML = `<div class="no-data"><strong>Failed to load basket</strong><span>${e}</span></div>`;
+  }
+}
+
 function blocksToAge(b) {
   if (b === null || b === undefined) return '—';
   const secs = b * 12;
@@ -1691,6 +1796,7 @@ async function triggerWeightsScan() {
 }
 
 async function loadValidatorsTab() {
+  await loadValidatorBasket();
   const cardsEl = document.getElementById('weightsCards');
   const tableEl = document.getElementById('weightsTable');
   const banner  = document.getElementById('burnBanner');
@@ -1703,6 +1809,7 @@ async function loadValidatorsTab() {
       tableEl.innerHTML = `<div class="no-data"><strong>${d.error}</strong>
         <span>The scan reads every validator's weight vector from chain (~30s).
         <button class="btn-sm" onclick="triggerWeightsScan()">Scan now</button></span></div>`;
+      loadRootBaskets();
       loadValidatorWallets();
       return;
     }
@@ -1772,10 +1879,125 @@ async function loadValidatorsTab() {
         <th>Top→</th><th>cos·cons</th><th>Copy verdict</th><th>Wt age</th>
       </tr></thead><tbody>${rows}</tbody></table></div>`;
 
+    loadRootBaskets();
     loadValidatorWallets();
   } catch (e) {
     console.error(e);
     tableEl.innerHTML = `<div class="no-data"><strong>Failed to load scan</strong><span>${e}</span></div>`;
+    loadRootBaskets();
+  }
+}
+
+async function triggerRootBasketsScan() {
+  const btn = event && event.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  try {
+    await fetch('/api/baskets/scan', { method: 'POST' });
+    await loadRootBaskets();
+  } catch (e) {
+    console.error('root-baskets scan failed', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Scan now (~5s)'; }
+  }
+}
+
+function rootBasketDelta(v, suffix) {
+  if (v == null) return '<span style="color:var(--muted)">—</span>';
+  const c = v > 0 ? 'var(--green)' : (v < 0 ? 'var(--red)' : 'var(--muted)');
+  const s = v > 0 ? '+' : '';
+  return `<span style="color:${c}">${s}${typeof v === 'number' ? v.toFixed(2) : v}${suffix || ''}</span>`;
+}
+
+async function loadRootBaskets() {
+  const cardsEl = document.getElementById('rootBasketsCards');
+  const tableEl = document.getElementById('rootBasketsTable');
+  const banner = document.getElementById('rootBasketsBanner');
+  const meta = document.getElementById('rootBasketsMeta');
+  if (!cardsEl || !tableEl) return;
+  try {
+    const r = await fetch('/api/baskets/scan');
+    const d = await r.json();
+    if (d.error && !d.funds) {
+      banner.className = 'alert-banner';
+      cardsEl.innerHTML = '';
+      tableEl.innerHTML = `<div class="no-data"><strong>${d.error}</strong>
+        <span>Root-network funds (netuid 0). Curated = 21 is in the weight vector; leftover = SN21 α held with no 21 weight.
+        <button class="btn-sm" onclick="triggerRootBasketsScan()">Scan now</button></span></div>`;
+      return;
+    }
+    const s = d.summary || {};
+    meta.textContent = ' · ' + (d.block != null ? 'block ' + fmtInt(d.block) + ' · ' : '')
+      + (d.fetched_at_utc || '').replace('T',' ').slice(0,16) + ' UTC'
+      + (d.is_baseline ? ' · baseline' : '')
+      + (d.stale ? ' · stale' : '');
+
+    const adds = s.add_names || [];
+    const drops = s.drop_names || [];
+    if (adds.length || drops.length) {
+      banner.className = 'alert-banner ' + (drops.length && !adds.length ? 'alert-drop' : 'alert-surge') + ' show';
+      const bits = [];
+      if (adds.length) bits.push('ADD ' + adds.join(', '));
+      if (drops.length) bits.push('DROP ' + drops.join(', '));
+      banner.innerHTML = `<span class="burn-pill ${drops.length && !adds.length ? '' : 'live'}">ROOT Δ</span>
+        <span>${bits.join(' · ')}</span>`;
+    } else if (d.is_baseline) {
+      banner.className = 'alert-banner alert-surge show';
+      banner.innerHTML = `<span class="burn-pill live">BASELINE</span>
+        <span>First census — ${s.n_curating || 0} curating 21, ${s.n_leftover || 0} leftover. Tomorrow’s scan starts the Δ.</span>`;
+    } else {
+      banner.className = 'alert-banner';
+      banner.innerHTML = '';
+    }
+
+    const cards = [
+      { label: 'Curating 21', value: s.n_curating || 0, unit: `/ ${s.n_all_funds || 0} funds`, accent: '#2563EB' },
+      { label: 'Leftover holders', value: s.n_leftover || 0, unit: 'no 21 weight', accent: '#F59E0B' },
+      { label: 'Realizable τ in 21', value: (s.realizable_tao_21 || 0).toFixed(2), unit: 'τ', accent: '#10B981' },
+      { label: 'Significant Δ', value: s.n_significant || 0, unit: d.is_baseline ? 'baseline' : 'vs yesterday', accent: '#8B5CF6' },
+    ];
+    cardsEl.innerHTML = cards.map(c => `
+      <div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+      </div>`).join('');
+
+    const funds = d.funds || [];
+    if (!funds.length) {
+      tableEl.innerHTML = `<div class="no-data"><strong>No SN21 signal</strong>
+        <span>No root fund is curating 21 or holding leftover SN21 α.</span></div>`;
+      return;
+    }
+    const rows = funds.map(v => {
+      const oursTag = v.is_ours ? ' <span class="house-chip">OURS</span>' : '';
+      const houseChip = (v.is_house && !v.is_ours) ? ' <span class="house-chip">HOUSE</span>' : '';
+      const kindChip = v.kind === 'curated'
+        ? ' <span class="house-chip" style="background:rgba(37,99,235,0.12);border-color:rgba(37,99,235,0.4);color:#60A5FA">CURATED</span>'
+        : ' <span class="house-chip" style="background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.4);color:#FBBF24">LEFTOVER</span>';
+      const nameText = v.name || `<span style="color:var(--muted)">${v.hotkey_short || '—'}</span>`;
+      const name = keyText(v.hotkey, nameText, 'Root validator hotkey');
+      const rowStyle = v.is_ours ? ' style="background:rgba(245,158,11,0.05)"'
+        : (v.significant ? ' style="background:rgba(139,92,246,0.04)"' : '');
+      const delta = v.kind === 'curated' && v.share_pp_delta != null
+        ? rootBasketDelta(v.share_pp_delta, ' pp')
+        : rootBasketDelta(v.sn21_tao_delta, ' τ');
+      return `<tr${rowStyle}>
+        <td>${name}${oursTag}${houseChip}${kindChip}</td>
+        <td class="mono">${v.kind === 'curated' && v.share_pp != null ? v.share_pp.toFixed(2)+'%' : '—'}</td>
+        <td class="mono">${v.dests != null ? v.dests : '—'}</td>
+        <td class="mono">${v.sn21_tao != null ? Number(v.sn21_tao).toFixed(3) : '—'} τ</td>
+        <td class="mono">${v.nav_tao != null ? Number(v.nav_tao).toFixed(1) : '—'} τ</td>
+        <td class="mono">${delta}</td>
+      </tr>`;
+    }).join('');
+    tableEl.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr>
+        <th>Fund</th><th>Share</th><th>Dests</th><th>SN21 τ</th><th>Fund NAV</th><th>Δ</th>
+      </tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } catch (e) {
+    console.error(e);
+    tableEl.innerHTML = `<div class="no-data"><strong>Failed to load root baskets</strong><span>${e}</span></div>`;
   }
 }
 

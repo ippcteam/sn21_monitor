@@ -52,6 +52,12 @@ FLOWS
 - <for each net_mover: name ±net_alpha_7d α>
 - Rotation suppressed: <n>                     [include ONLY if rotations_suppressed > 0]
 
+ROOT BASKETS
+- Curating 21: <n_curating> · leftover: <n_leftover> · realizable τ in 21: <realizable_tao_21>
+- ADD: <adds>                                  [adds/drops FIRST if either list is non-empty]
+- DROP: <drops>
+- <other significant: share/position/leftover-new, one line each>
+
 RISKS / WATCH
 - <1–3 bullets, only from `flags`. Omit the whole section if flags is empty.>
 ```
@@ -60,6 +66,12 @@ Gating rules:
 - Always emit HEADLINE + OWNER + TAPE.
 - Omit MARKET only if `market.available` is false.
 - Omit FLOWS entirely if `flows.net_movers` is empty AND |holder_delta| < 10.
+- ROOT BASKETS is V450 root-fund dividend flow into SN21, not the SN21 permit table.
+  Curated = 21 is in the weight vector (a vote). Leftover = SN21 α held with no 21 weight (inventory).
+  A leftover that starts curating is an ADD. Adds/drops first.
+  Omit the section if `root_baskets.available` is false.
+  If `is_baseline` is true: one census line only ("Baseline: N curating, M leftover, X τ. No Δ yet.").
+  If not baseline and `n_significant` is 0: omit the section.
 - Omit RISKS / WATCH if `flags` is empty.
 - Omit the "Next tier" / next-step clause unless `days_to_next_tier` ≤ 45.
 - If `flags` is empty AND `flows.net_movers` is empty AND |entitled_7d_pct| < 1 AND market verdict is "inline" or "outperforming": headline is the quiet/tape line; still emit OWNER + TAPE + MARKET; skip FLOWS and RISKS.

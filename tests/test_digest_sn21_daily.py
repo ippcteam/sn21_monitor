@@ -77,6 +77,17 @@ def test_flags_silent_on_standing_burn_and_flat_entitlement():
     market = {"available": True, "verdict": "inline", "breadth": {}, "sn21": {}}
     flags = src._flags({}, {"available": False}, owner, market, tape)
     assert flags == []
+    # Baseline census must not flag; add/drop after baseline must.
+    assert src._flags(
+        {}, {"available": False}, owner, market, tape,
+        {"available": True, "is_baseline": True, "adds": ["Rizzo"]},
+    ) == []
+    fired = src._flags(
+        {}, {"available": False}, owner, market, tape,
+        {"available": True, "is_baseline": False, "adds": ["Rizzo"], "drops": ["OTF"]},
+    )
+    assert any("ADD: Rizzo" in f for f in fired)
+    assert any("DROP: OTF" in f for f in fired)
 
 
 def test_flags_fire_on_burn_move_and_sn21_specific():
@@ -172,3 +183,28 @@ def test_fallback_includes_tape_not_burn_collapse():
     assert "setpoint 45.1%" in text
     assert "collapsed" not in text.lower()
     assert "SUSTAINED" not in text
+
+
+def test_fallback_root_baskets_adds_first():
+    text = fallback_compose({
+        "date": "2026-08-29",
+        "root_baskets": {
+            "available": True,
+            "is_baseline": False,
+            "n_curating": 2,
+            "n_leftover": 4,
+            "realizable_tao_21": 12.5,
+            "n_significant": 2,
+            "adds": ["Taostats"],
+            "drops": ["Rizzo"],
+            "significant": [
+                {"name": "Taostats", "reasons": ["curated_add"]},
+                {"name": "Rizzo", "reasons": ["curated_drop"]},
+            ],
+        },
+        "flags": [],
+    }, "SN21 Daily")
+    assert "ROOT BASKETS" in text
+    add_at = text.index("ADD: Taostats")
+    drop_at = text.index("DROP: Rizzo")
+    assert add_at < drop_at

@@ -2,6 +2,37 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-08-29 — V450 root baskets · SN21 holdings
+
+### Added
+- **`baskets_scan.py`** — Finney read of `BetaBasketRuntimeApi.get_all_validator_baskets`
+  via the existing 11.0.0 substrate client (no 11.3 bump). Classifies each
+  root-network fund as **curated** (21 in the weight vector) or **leftover**
+  (SN21 α held, no 21 weight). A leftover that starts curating is an add.
+  First snapshot is a baseline census. Significance: always add/drop; share
+  ≥1 pp; position ≥1 τ and ≥10%; new leftover ≥5 τ.
+- **`data/root_baskets.json`** + **`data/root_baskets_history.json`** (90d).
+- **API**: `GET/POST /api/baskets/scan`, `GET /api/baskets/history`.
+- **Scheduler** — 09:18 UTC, before weights (09:20) and the daily digest (09:30).
+- **Validators tab** — new **Root baskets · SN21 holdings** section (cards,
+  add/drop banner, table). SN21 weight-copy table unchanged.
+- **Daily digest** — `root_baskets` in `gather()`; adds/drops first; omitted
+  when quiet. Fail-soft if the scan file is missing.
+
+## 2026-08-17 — Named operators with SN21 in their basket
+
+### Added
+- **`validator_basket_sync.py`** — Taostats `GET /api/dtao/validator/available/v1?netuid=21`
+  lists every hotkey that currently holds SN21 α (the live dTAO basket). Optional
+  join to the latest holders snapshot adds nominator counts. Daily enter/exit
+  vs the prior snapshot.
+- **`data/validator_basket.json`** + **`data/validator_basket_history.json`**
+  (90d compact rows: named-count, total α, entered/exited names).
+- **API**: `GET/POST /api/validator-basket`, `GET /api/validator-basket/history`.
+- **Scheduler** — 08:50 UTC, after the holders snapshot so nominators can join.
+- **Validators tab** — named-operator table with α share, nominators, 24h Δ,
+  NEW/EXITED chips.
+
 ## 2026-08-17 — Daily digest: tape in, burn-collapse out
 
 ### Changed

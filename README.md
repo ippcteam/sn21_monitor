@@ -21,7 +21,7 @@ movements, and burn-aware weekly earnings.
 | **Home** | Live metrics (owner pool 18%, our entitlement, alpha price, TAO price, wallet balance/USD) · **House Earnings · Current Mining Week** (miners net + gross, validators, owner key, burn pill) · 5-week stacked weekly chart · trend charts · active UID table |
 | **Activity** | Subnet 24h pool volumes (buy/sell), holder count, burn rate, active validator/miner counts · 30-day trend charts |
 | **Neurons** | All 256 SN21 UIDs split by **live role** (vTrust/dividends/validating α vs incentive/mining α — not `validator_permit`), with mining/validation window detection (Mon 12:00 ET → following Mon 12:00 ET), submitting-in-window flag, and **House toggle column** (☆/★) plus All/House/Other filter pills |
-| **Validators** | On-chain weight-copy scan: burn-status banner, per-validator scoring breadth, vTrust, stake%, cosine-to-consensus, and copy verdict (copier vs independent, with source guess) · **Our validator wallet identification** (coldkey→stake breakdown for UID 64, cross-checked against on-chain `TotalHotkeyAlpha`) |
+| **Validators** | **Named operators with SN21 in their basket** (Taostats `validator/available`, α share, nominator counts, 24h enter/exit) · On-chain weight-copy scan: burn-status banner, per-validator scoring breadth, vTrust, stake%, cosine-to-consensus, and copy verdict · **Root baskets · SN21 holdings** (V450 root-network funds: curated vs leftover) · **Our validator wallet identification** (coldkey→stake breakdown for UID 64) |
 | **Movement** | Our owner-coldkey alpha balance over time · 24h holder movers (top inflows/outflows, NEW/EXITED/BOUGHT/SOLD), with House column and house/other split in the summary |
 
 ## House vs Other labels
@@ -105,6 +105,10 @@ overwritten by the seed.
 ├── subnet_notes.json           — manual qualitative overrides per candidate netuid
 ├── weights_scan.json           — latest validator weight-copy / burn scan
 ├── weights_scan_history.json   — daily burn-fraction / copier-count rows (90d)
+├── validator_basket.json       — latest named operators with SN21 α on their hotkey
+├── validator_basket_history.json — daily named-count / enter / exit rows (90d)
+├── root_baskets.json           — latest V450 root-fund SN21 signal (curated vs leftover)
+├── root_baskets_history.json   — daily curating / leftover / add-drop rows (90d)
 ├── validator_names.json        — hotkey→operator-name cache (Taostats)
 ├── subnets_market.json         — latest all-subnets alpha-price scan (SN21 vs field)
 ├── subnets_market_history.json — SN21 percentile-rank / breadth rows (365d)
@@ -205,8 +209,10 @@ oldest available snapshot.
 | Taostats owner sync (transfers + balance + price) | 08:15 | `taostats_sync.sync_owner_transfers` |
 | Subnet daily sync (Activity tab data) | 08:30 | `subnet_sync.sync_subnet_daily` |
 | Holders snapshot (Movement tab data) | 08:45 | `holders_sync.sync_holders_snapshot` |
+| Validator basket (named operators on SN21) | 08:50 | `validator_basket_sync.run_sync` |
 | Neurons per-UID daily snapshot (House weekly data) | 09:00 | `neurons_daily_sync.sync_neurons_daily` |
 | Scout scan (candidate subnets) | 09:15 | `subnet_scan.run_scan` |
+| Root baskets (V450 SN21 signal) | 09:18 | `baskets_scan.run_scan` |
 | Validator weight-copy / burn scan | 09:20 | `weights_scan.run_scan` |
 | Daily SN21 digest (Telegram) | 09:30 (override via `DIGEST_TIME_UTC`) | `digest.run_digest("sn21_daily")` |
 | **Scout weekly digest (Telegram)** | **Mon 10:00** | `digest.run_digest("scout_weekly")` |
@@ -238,6 +244,10 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `GET /api/scan/notes` — qualitative overrides ({ netuid: { multiplier, note } })
 - `GET /api/weights/scan` — latest validator weight-copy / burn scan (Validators tab)
 - `GET /api/weights/history?days=30` — daily burn-fraction / copier-count rows
+- `GET /api/validator-basket` — named operators with SN21 α on their hotkey
+- `GET /api/validator-basket/history?days=30` — daily named-count / enter / exit rows
+- `GET /api/baskets/scan` — latest V450 root-basket SN21 signal (curated vs leftover)
+- `GET /api/baskets/history?days=30` — daily curating / leftover / add-drop rows
 - `GET /api/validator/wallets` — coldkey→stake breakdown for our validator (UID 64)
 - `GET /api/market/summary` — latest all-subnets scan (SN21 standing, breadth, cohorts, per-subnet prices)
 - `GET /api/market/history?days=30` — SN21 percentile-rank / market-breadth rows
@@ -259,6 +269,8 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `POST /api/scan/notes/{netuid}` — set qualitative override `{ multiplier?, note? }`
 - `DELETE /api/scan/notes/{netuid}` — remove override
 - `POST /api/weights/scan` — run on-chain validator weight scan now (~30 s)
+- `POST /api/validator-basket/sync` — pull named operators with SN21 in their basket (~2 s)
+- `POST /api/baskets/scan` — read every root fund via `BetaBasketRuntimeApi` (~5 s)
 
 The topbar **Refresh** button fans out collect → taostats → subnet → house-snapshot
 sequentially with 300 ms gaps. Holders snapshot is intentionally excluded

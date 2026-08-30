@@ -55,6 +55,16 @@ from weights_scan import (
     run_scan as weights_run,
     scan_history as weights_history,
 )
+from validator_basket_sync import (
+    history as basket_history,
+    latest as basket_latest,
+    run_sync as basket_run,
+)
+from baskets_scan import (
+    latest_scan as baskets_latest,
+    run_scan as baskets_run,
+    scan_history as baskets_history,
+)
 from stake_watch import (
     STAKE_WATCH_HISTORY,
     STAKE_WATCH_STORE,
@@ -725,6 +735,65 @@ async def api_validator_wallets(_=Depends(require_auth), hotkey: str | None = No
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Root baskets (V450 curated dividend stream → SN21) ────────────────────────
+
+
+@app.get("/api/baskets/scan")
+async def api_baskets_scan(_=Depends(require_auth)):
+    """Latest root-basket SN21 signal set (cached 60s on disk)."""
+    payload = baskets_latest()
+    if not payload:
+        return {"error": "No scan yet — POST /api/baskets/scan"}
+    return payload
+
+
+@app.post("/api/baskets/scan")
+async def api_baskets_scan_run(_=Depends(require_auth)):
+    """Read every root fund via BetaBasketRuntimeApi (~5s). Fail-soft on chain errors."""
+    try:
+        return baskets_run()
+    except Exception as e:
+        logger.exception("Root-baskets scan failed")
+        cached = baskets_latest()
+        if cached:
+            return {**cached, "stale": True, "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/baskets/history")
+async def api_baskets_history(_=Depends(require_auth), days: int = 30):
+    """Daily curating / leftover / significant-Δ rows (last N days)."""
+    return baskets_history(days=days)
+
+
+# ── Named operators with SN21 in their staking basket ─────────────────────────
+
+
+@app.get("/api/validator-basket")
+async def api_validator_basket(_=Depends(require_auth)):
+    """Latest named-operator basket: who has SN21 α on their hotkey."""
+    payload = basket_latest()
+    if not payload:
+        return {"error": "No basket snapshot yet — POST /api/validator-basket/sync"}
+    return payload
+
+
+@app.get("/api/validator-basket/history")
+async def api_validator_basket_history(_=Depends(require_auth), days: int = 30):
+    """Daily named-count / enter / exit rows (last N days)."""
+    return basket_history(days=days)
+
+
+@app.post("/api/validator-basket/sync")
+async def api_validator_basket_sync(_=Depends(require_auth)):
+    """Pull Taostats validator/available for netuid 21 now (~1–2s)."""
+    try:
+        return basket_run()
+    except Exception as e:
+        logger.exception("Validator-basket sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Market context (all-subnets alpha-price peer comparison) ──────────────────
 
 
@@ -1091,6 +1160,20 @@ def scheduled_weights_scan():
         logger.exception("Scheduled weights scan failed")
 
 
+def scheduled_root_baskets():
+    try:
+        baskets_run()
+    except Exception:
+        logger.exception("Scheduled root-baskets scan failed")
+
+
+def scheduled_validator_basket():
+    try:
+        basket_run()
+    except Exception:
+        logger.exception("Scheduled validator-basket sync failed")
+
+
 def scheduled_house_miners():
     try:
         from house_miners import build_house_miners
@@ -1256,6 +1339,12 @@ scheduler.add_job(
     replace_existing=True,
 )
 scheduler.add_job(
+    scheduled_validator_basket,
+    CronTrigger(hour=8, minute=50),
+    id="daily_validator_basket",
+    replace_existing=True,
+)
+scheduler.add_job(
     scheduled_neurons_daily,
     CronTrigger(hour=9, minute=0),
     id="daily_neurons_snapshot",
@@ -1271,6 +1360,12 @@ scheduler.add_job(
     scheduled_scout_scan,
     CronTrigger(hour=9, minute=15),
     id="daily_scout_scan",
+    replace_existing=True,
+)
+scheduler.add_job(
+    scheduled_root_baskets,
+    CronTrigger(hour=9, minute=18),
+    id="daily_root_baskets",
     replace_existing=True,
 )
 scheduler.add_job(
@@ -1369,7 +1464,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; neurons-daily 09:00; miner-payouts 09:02; scout 09:15; weights 09:20 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; basket 08:50; neurons-daily 09:00; miner-payouts 09:02; scout 09:15; root-baskets 09:18; weights 09:20 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 
