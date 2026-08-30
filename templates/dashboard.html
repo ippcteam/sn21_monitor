@@ -1963,7 +1963,7 @@ async function loadRootBaskets() {
     } else if (d.is_baseline) {
       banner.className = 'alert-banner alert-surge show';
       banner.innerHTML = `<span class="burn-pill live">BASELINE</span>
-        <span>First census — ${s.n_included ?? s.n_curating || 0} included 21, ${s.n_excluded || 0} excluded 21, ${s.n_no_vector || 0} no vector. Tomorrow’s scan starts the Δ.</span>`;
+        <span>First census — ${s.n_included ?? s.n_curating ?? 0} included 21, ${s.n_excluded || 0} excluded 21, ${s.n_no_vector || 0} no vector. Tomorrow’s scan starts the Δ.</span>`;
     } else {
       banner.className = 'alert-banner';
       banner.innerHTML = '';

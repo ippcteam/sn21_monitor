@@ -2,6 +2,13 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-08-30 — Dashboard load fix
+
+### Fixed
+- Home (and every other tab) stayed on **Loading…** after the include/exclude
+  ship: a `??` mixed with `||` in the root-baskets baseline banner is a
+  syntax error and killed the whole page script.
+
 ## 2026-08-30 — Root baskets: include vs exclude vs no vector
 
 ### Changed
