@@ -35,6 +35,10 @@ def _fmt_tao(v: Any) -> str:
     return _fmt_num(v, 4)
 
 
+def _display_or(v: Any) -> str:
+    return str(v) if v else "—"
+
+
 def _fmt_price(v: Any) -> str:
     if v is None:
         return "—"
@@ -155,6 +159,51 @@ def compose(inputs: dict[str, Any], title: str,
                 f"  rotation suppressed: {flows['rotations_suppressed']} validator(s) "
                 f"rotated coldkeys, net ≈ 0"
             )
+
+    # ROOT BASKETS — V450 curated dividend stream. Adds/drops first.
+    rb = inputs.get("root_baskets") or {}
+    if rb.get("available"):
+        if rb.get("is_baseline"):
+            lines.append("")
+            lines.append("ROOT BASKETS")
+            lines.append(
+                f"  baseline: {rb.get('n_curating') or 0} curating · "
+                f"{rb.get('n_leftover') or 0} leftover · "
+                f"{_fmt_num(rb.get('realizable_tao_21'), 2)} τ in 21. No Δ yet."
+            )
+        elif rb.get("n_significant"):
+            lines.append("")
+            lines.append("ROOT BASKETS")
+            lines.append(
+                f"  curating 21: {rb.get('n_curating') or 0} · "
+                f"leftover: {rb.get('n_leftover') or 0} · "
+                f"{_fmt_num(rb.get('realizable_tao_21'), 2)} τ"
+            )
+            adds = rb.get("adds") or []
+            drops = rb.get("drops") or []
+            if adds:
+                lines.append(f"  ADD: {', '.join(adds)}")
+            if drops:
+                lines.append(f"  DROP: {', '.join(drops)}")
+            for c in rb.get("significant") or []:
+                reasons = c.get("reasons") or []
+                if "curated_add" in reasons or "curated_drop" in reasons:
+                    continue
+                label = _display_or(c.get("name"))
+                if "share_move" in reasons:
+                    lines.append(
+                        f"  {label}: share {c.get('share_pp')} "
+                        f"({_fmt_num(c.get('share_pp_delta'), 2)} pp)"
+                    )
+                elif "position_move" in reasons:
+                    lines.append(
+                        f"  {label}: pos {_fmt_num(c.get('sn21_tao'), 2)} τ "
+                        f"({_fmt_num(c.get('sn21_tao_delta'), 2)})"
+                    )
+                elif "leftover_new" in reasons:
+                    lines.append(
+                        f"  leftover {label}: {_fmt_num(c.get('sn21_tao'), 2)} τ"
+                    )
 
     # RISKS / WATCH — only real flags.
     flags = inputs.get("flags") or []

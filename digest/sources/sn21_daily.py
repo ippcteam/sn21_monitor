@@ -964,8 +964,22 @@ def _tape_section(subnet_log: list[dict], trends: dict) -> dict[str, Any]:
 
 # ── Flags / risks the LLM should weight ──────────────────────────────────────
 
+def _root_baskets_section() -> dict[str, Any]:
+    """V450 root-fund SN21 signal. Fail-soft: missing file → unavailable."""
+    try:
+        from baskets_scan import digest_payload, latest_scan
+    except Exception:
+        return {"available": False}
+    try:
+        return digest_payload(latest_scan())
+    except Exception:
+        logger.exception("root_baskets digest read failed")
+        return {"available": False}
+
+
 def _flags(price: dict, flows: dict, owner_econ: dict,
-           market: dict | None = None, tape: dict | None = None) -> list[str]:
+           market: dict | None = None, tape: dict | None = None,
+           root_baskets: dict | None = None) -> list[str]:
     """
     Only material, non-recurring signals. Standing setpoints (burn at 45.1%,
     entitled α flat at 324) do not fire.
@@ -1023,6 +1037,14 @@ def _flags(price: dict, flows: dict, owner_econ: dict,
         if big_out:
             names = ", ".join(f"{m['name']} {m['net_alpha_7d']:.0f}α" for m in big_out[:3])
             flags.append(f"Net distribution (7d): {names}")
+
+    if root_baskets and root_baskets.get("available") and not root_baskets.get("is_baseline"):
+        adds = root_baskets.get("adds") or []
+        drops = root_baskets.get("drops") or []
+        if adds:
+            flags.append(f"Root basket ADD: {', '.join(adds[:4])}")
+        if drops:
+            flags.append(f"Root basket DROP: {', '.join(drops[:4])}")
 
     return flags
 
@@ -1095,6 +1117,7 @@ def gather() -> dict[str, Any]:
     # Owner economics — promoted to a first-class block the narrator leads with.
     owner_economics = _owner_economics_section(emissions, owner, burn, tier, trends)
     tape = _tape_section(subnet_log, trends)
+    root_baskets = _root_baskets_section()
 
     # If subnet_log carries TAO USD via the daily log fallback, fold it in.
     if price.get("tao_price_usd") is None and daily_log:
@@ -1117,6 +1140,7 @@ def gather() -> dict[str, Any]:
         "market": market,
         "price": price,
         "tape": tape,
+        "root_baskets": root_baskets,
         "flows": flows,
         "pool": pool,
         "movers": movers,
@@ -1128,5 +1152,5 @@ def gather() -> dict[str, Any]:
         "stale_fields": stale,
     }
     out.update(window_movers)  # movers_7d, movers_30d
-    out["flags"] = _flags(price, flows, owner_economics, market, tape)
+    out["flags"] = _flags(price, flows, owner_economics, market, tape, root_baskets)
     return out
