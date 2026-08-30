@@ -200,12 +200,32 @@ def classify(
     kind = "curated" if curated else ("leftover" if leftover else None)
     return {
         "kind": kind,
+        "choice": choice_for(kind, dests),
         "share": share,
         "share_pp": round(share * 100.0, 4),
         "dests": dests,
         "sn21_alpha": sn21_alpha,
         "sn21_tao": sn21_tao,
     }
+
+
+def choice_for(kind: str | None, dests: int) -> str | None:
+    """
+    Active root-weight choice, distinct from leftover inventory.
+
+    include — published a vector and put 21 in it
+    exclude — published a vector and left 21 out
+    none    — no custom vector (null strategy); leftover α is not a vote
+    """
+    if kind == "curated":
+        return "include"
+    if kind is None and dests <= 0:
+        return None
+    if dests > 0:
+        return "exclude"
+    if kind == "leftover":
+        return "none"
+    return None
 
 
 def normalize_fund(raw: dict[str, Any], netuid: int = NETUID) -> dict[str, Any] | None:
@@ -223,6 +243,7 @@ def normalize_fund(raw: dict[str, Any], netuid: int = NETUID) -> dict[str, Any] 
         "spot_nav_tao": round(_as_rao(raw.get("spot_nav_tao")), 6),
         "shares": _as_int(raw.get("shares")),
         "kind": sig["kind"],
+        "choice": sig["choice"],
         "share": sig["share"],
         "share_pp": sig["share_pp"],
         "dests": sig["dests"],
@@ -254,8 +275,10 @@ def annotate(
             name = name.strip() or None
         else:
             name = None
+        dests = int(f.get("dests") or 0)
         out.append({
             **f,
+            "choice": f.get("choice") or choice_for(f.get("kind"), dests),
             "name": name,
             "is_house": is_house(None, hk, house=house),
             "is_ours": hk == our_hotkey,
@@ -265,7 +288,7 @@ def annotate(
             "significant": False,
         })
     out.sort(key=lambda r: (
-        0 if r.get("kind") == "curated" else 1,
+        {"include": 0, "exclude": 1, "none": 2}.get(r.get("choice"), 3),
         -(r.get("sn21_tao") or 0.0),
         r.get("name") or r["hotkey"],
     ))
@@ -423,6 +446,9 @@ def summarise(
 ) -> dict[str, Any]:
     curating = [f for f in funds if f.get("kind") == "curated"]
     leftover = [f for f in funds if f.get("kind") == "leftover"]
+    included = [f for f in funds if f.get("choice") == "include"]
+    excluded = [f for f in funds if f.get("choice") == "exclude"]
+    no_vector = [f for f in funds if f.get("choice") == "none"]
     sig = [c for c in changes if c.get("significant")]
     adds = [c for c in sig if "curated_add" in c["reasons"]]
     drops = [c for c in sig if "curated_drop" in c["reasons"]]
@@ -430,6 +456,9 @@ def summarise(
         "n_all_funds": n_all_funds,
         "n_curating": len(curating),
         "n_leftover": len(leftover),
+        "n_included": len(included),
+        "n_excluded": len(excluded),
+        "n_no_vector": len(no_vector),
         "realizable_tao_21": round(sum(f.get("sn21_tao") or 0 for f in funds), 6),
         "curated_tao_21": round(sum(f.get("sn21_tao") or 0 for f in curating), 6),
         "n_significant": len(sig),
@@ -458,6 +487,7 @@ def digest_payload(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     """Compact block for gather() / the Telegram composer."""
     if not snapshot or not isinstance(snapshot, dict) or not snapshot.get("summary"):
         return {"available": False}
+    hydrate_snapshot(snapshot)
     s = snapshot["summary"]
     sig = [c for c in (snapshot.get("changes") or []) if c.get("significant")]
     return {
@@ -465,6 +495,9 @@ def digest_payload(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         "is_baseline": bool(s.get("is_baseline")),
         "n_curating": s.get("n_curating") or 0,
         "n_leftover": s.get("n_leftover") or 0,
+        "n_included": s.get("n_included") or s.get("n_curating") or 0,
+        "n_excluded": s.get("n_excluded") or 0,
+        "n_no_vector": s.get("n_no_vector") or 0,
         "realizable_tao_21": s.get("realizable_tao_21") or 0.0,
         "n_significant": s.get("n_significant") or 0,
         "adds": s.get("add_names") or [],
@@ -614,12 +647,44 @@ def run_scan() -> dict[str, Any]:
         return snapshot
 
 
+def hydrate_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Fill include/exclude/none on snapshots taken before `choice` existed."""
+    if not snapshot or not isinstance(snapshot, dict):
+        return snapshot
+    funds = snapshot.get("funds") or []
+    for f in funds:
+        if not f.get("choice"):
+            f["choice"] = choice_for(f.get("kind"), int(f.get("dests") or 0))
+    funds.sort(key=lambda r: (
+        {"include": 0, "exclude": 1, "none": 2}.get(r.get("choice"), 3),
+        -(r.get("sn21_tao") or 0.0),
+        r.get("name") or r.get("hotkey") or "",
+    ))
+    snapshot["funds"] = funds
+    s = snapshot.setdefault("summary", {})
+    if s.get("n_excluded") is None or s.get("n_no_vector") is None:
+        s["n_included"] = sum(1 for f in funds if f.get("choice") == "include")
+        s["n_excluded"] = sum(1 for f in funds if f.get("choice") == "exclude")
+        s["n_no_vector"] = sum(1 for f in funds if f.get("choice") == "none")
+        if s.get("n_curating") is None:
+            s["n_curating"] = s["n_included"]
+        if s.get("n_leftover") is None:
+            s["n_leftover"] = s["n_excluded"] + s["n_no_vector"]
+    return snapshot
+
+
 def latest_scan() -> dict[str, Any] | None:
     with _cache_lock:
         if _cache["payload"] and (_time.time() - _cache["fetched_at"]) < CACHE_TTL_SECONDS:
-            return _cache["payload"]
+            return hydrate_snapshot(_cache["payload"])
     stored = load_json(SCAN_STORE, None)
-    return stored if isinstance(stored, dict) else None
+    if not isinstance(stored, dict):
+        return None
+    hydrated = hydrate_snapshot(stored)
+    with _cache_lock:
+        _cache["payload"] = hydrated
+        _cache["fetched_at"] = _time.time()
+    return hydrated
 
 
 def scan_history(days: int = 30) -> list[dict[str, Any]]:

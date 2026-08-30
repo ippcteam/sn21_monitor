@@ -53,7 +53,7 @@ FLOWS
 - Rotation suppressed: <n>                     [include ONLY if rotations_suppressed > 0]
 
 ROOT BASKETS
-- Curating 21: <n_curating> · leftover: <n_leftover> · realizable τ in 21: <realizable_tao_21>
+- Included 21: <n_included> · excluded 21: <n_excluded> · no vector: <n_no_vector> · realizable τ in 21: <realizable_tao_21>
 - ADD: <adds>                                  [adds/drops FIRST if either list is non-empty]
 - DROP: <drops>
 - <other significant: share/position/leftover-new, one line each>
@@ -67,10 +67,10 @@ Gating rules:
 - Omit MARKET only if `market.available` is false.
 - Omit FLOWS entirely if `flows.net_movers` is empty AND |holder_delta| < 10.
 - ROOT BASKETS is V450 root-fund dividend flow into SN21, not the SN21 permit table.
-  Curated = 21 is in the weight vector (a vote). Leftover = SN21 α held with no 21 weight (inventory).
-  A leftover that starts curating is an ADD. Adds/drops first.
+  Included = they published a vector and put 21 in it (a vote). Excluded = they published a vector and left 21 out (also a vote). No vector = leftover SN21 α with no custom weights (inventory, not a vote).
+  A leftover that starts including 21 is an ADD. Adds/drops first.
   Omit the section if `root_baskets.available` is false.
-  If `is_baseline` is true: one census line only ("Baseline: N curating, M leftover, X τ. No Δ yet.").
+  If `is_baseline` is true: one census line only ("Baseline: N included, M excluded, K no vector, X τ. No Δ yet.").
   If not baseline and `n_significant` is 0: omit the section.
 - Omit RISKS / WATCH if `flags` is empty.
 - Omit the "Next tier" / next-step clause unless `days_to_next_tier` ≤ 45.

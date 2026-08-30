@@ -21,7 +21,7 @@ movements, and burn-aware weekly earnings.
 | **Home** | Live metrics (owner pool 18%, our entitlement, alpha price, TAO price, wallet balance/USD) · **House Earnings · Current Mining Week** (miners net + gross, validators, owner key, burn pill) · 5-week stacked weekly chart · trend charts · active UID table |
 | **Activity** | Subnet 24h pool volumes (buy/sell), holder count, burn rate, active validator/miner counts · 30-day trend charts |
 | **Neurons** | All 256 SN21 UIDs split by **live role** (vTrust/dividends/validating α vs incentive/mining α — not `validator_permit`), with mining/validation window detection (Mon 12:00 ET → following Mon 12:00 ET), submitting-in-window flag, and **House toggle column** (☆/★) plus All/House/Other filter pills |
-| **Validators** | **Named operators with SN21 in their basket** (Taostats `validator/available`, α share, nominator counts, 24h enter/exit) · On-chain weight-copy scan: burn-status banner, per-validator scoring breadth, vTrust, stake%, cosine-to-consensus, and copy verdict · **Root baskets · SN21 holdings** (V450 root-network funds: curated vs leftover) · **Our validator wallet identification** (coldkey→stake breakdown for UID 64) |
+| **Validators** | **Named operators with SN21 in their basket** (Taostats `validator/available`, α share, nominator counts, 24h enter/exit) · On-chain weight-copy scan: burn-status banner, per-validator scoring breadth, vTrust, stake%, cosine-to-consensus, and copy verdict · **Root baskets · SN21 choice** (V450 root-network funds: included / excluded / no vector) · **Our validator wallet identification** (coldkey→stake breakdown for UID 64) |
 | **Movement** | Our owner-coldkey alpha balance over time · 24h holder movers (top inflows/outflows, NEW/EXITED/BOUGHT/SOLD), with House column and house/other split in the summary |
 
 ## House vs Other labels
@@ -107,7 +107,7 @@ overwritten by the seed.
 ├── weights_scan_history.json   — daily burn-fraction / copier-count rows (90d)
 ├── validator_basket.json       — latest named operators with SN21 α on their hotkey
 ├── validator_basket_history.json — daily named-count / enter / exit rows (90d)
-├── root_baskets.json           — latest V450 root-fund SN21 signal (curated vs leftover)
+├── root_baskets.json           — latest V450 root-fund SN21 signal (include / exclude / no vector)
 ├── root_baskets_history.json   — daily curating / leftover / add-drop rows (90d)
 ├── validator_names.json        — hotkey→operator-name cache (Taostats)
 ├── subnets_market.json         — latest all-subnets alpha-price scan (SN21 vs field)
@@ -246,7 +246,7 @@ which takes the same secret in `X-SN21-Key` (or `Authorization: Bearer`).
 - `GET /api/weights/history?days=30` — daily burn-fraction / copier-count rows
 - `GET /api/validator-basket` — named operators with SN21 α on their hotkey
 - `GET /api/validator-basket/history?days=30` — daily named-count / enter / exit rows
-- `GET /api/baskets/scan` — latest V450 root-basket SN21 signal (curated vs leftover)
+- `GET /api/baskets/scan` — latest V450 root-basket SN21 signal (include / exclude / no vector)
 - `GET /api/baskets/history?days=30` — daily curating / leftover / add-drop rows
 - `GET /api/validator/wallets` — coldkey→stake breakdown for our validator (UID 64)
 - `GET /api/market/summary` — latest all-subnets scan (SN21 standing, breadth, cohorts, per-subnet prices)

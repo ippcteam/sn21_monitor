@@ -2,6 +2,15 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-08-30 — Root baskets: include vs exclude vs no vector
+
+### Changed
+- **Validators tab** labels an active SN21 *choice*: **INCLUDED 21** (set
+  weights, 21 in the vector), **EXCLUDED 21** (set weights, skipped 21),
+  **NO VECTOR** (leftover α, no custom weights). Cards and digest use the
+  same split so leftover inventory is not read as a skip. Existing
+  snapshots are backfilled on read — no rescan required.
+
 ## 2026-08-29 — V450 root baskets · SN21 holdings
 
 ### Added
