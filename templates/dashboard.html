@@ -795,10 +795,15 @@
     </div>
 
     <div class="section-label">
-      Root baskets · SN21 holdings
+      Root baskets · SN21 choice
       <span id="rootBasketsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
       <button class="btn-sm" style="margin-left:auto" onclick="triggerRootBasketsScan()" title="Read every root fund via BetaBasketRuntimeApi (~5s)">Scan now (~5s)</button>
     </div>
+    <p id="rootBasketsLegend" style="font-family:var(--mono);font-size:0.72rem;color:var(--muted);margin:0.4rem 0 0;line-height:1.45;max-width:72rem">
+      <strong style="color:var(--text-dim)">INCLUDED</strong> = they set root weights and put 21 in the vector (future dividends buy 21).
+      <strong style="color:var(--text-dim)">EXCLUDED</strong> = they set root weights and left 21 out (also an active choice).
+      <strong style="color:var(--text-dim)">NO VECTOR</strong> = no custom weights; any SN21 α is leftover inventory, not a vote.
+    </p>
     <div id="rootBasketsBanner" class="alert-banner" style="margin-top:0.75rem"></div>
     <div class="cards-grid" id="rootBasketsCards">
       <div class="loading"><div class="spinner"></div> Loading…</div>
@@ -1901,6 +1906,21 @@ async function triggerRootBasketsScan() {
   }
 }
 
+function rootBasketChoice(v) {
+  if (v && v.choice) return v.choice;
+  if (v && v.kind === 'curated') return 'include';
+  if (v && (v.dests || 0) > 0) return 'exclude';
+  return 'none';
+}
+
+function rootBasketChoiceChip(choice) {
+  if (choice === 'include')
+    return '<span class="house-chip" style="background:rgba(37,99,235,0.12);border-color:rgba(37,99,235,0.4);color:#60A5FA" title="Set root weights and put 21 in the vector. Future dividends buy 21.">INCLUDED 21</span>';
+  if (choice === 'exclude')
+    return '<span class="house-chip" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4);color:#F87171" title="Set root weights and left 21 out. Future dividends go elsewhere. Any SN21 τ is leftover inventory.">EXCLUDED 21</span>';
+  return '<span class="house-chip" style="background:rgba(148,163,184,0.10);border-color:rgba(148,163,184,0.35);color:#94A3B8" title="No custom root weights. SN21 α accrued in place — not a vote.">NO VECTOR</span>';
+}
+
 function rootBasketDelta(v, suffix) {
   if (v == null) return '<span style="color:var(--muted)">—</span>';
   const c = v > 0 ? 'var(--green)' : (v < 0 ? 'var(--red)' : 'var(--muted)');
@@ -1921,7 +1941,7 @@ async function loadRootBaskets() {
       banner.className = 'alert-banner';
       cardsEl.innerHTML = '';
       tableEl.innerHTML = `<div class="no-data"><strong>${d.error}</strong>
-        <span>Root-network funds (netuid 0). Curated = 21 is in the weight vector; leftover = SN21 α held with no 21 weight.
+        <span>Root-network funds (netuid 0). Included / excluded = they published a weight vector. No vector = leftover SN21 α, no choice yet.
         <button class="btn-sm" onclick="triggerRootBasketsScan()">Scan now</button></span></div>`;
       return;
     }
@@ -1943,15 +1963,22 @@ async function loadRootBaskets() {
     } else if (d.is_baseline) {
       banner.className = 'alert-banner alert-surge show';
       banner.innerHTML = `<span class="burn-pill live">BASELINE</span>
-        <span>First census — ${s.n_curating || 0} curating 21, ${s.n_leftover || 0} leftover. Tomorrow’s scan starts the Δ.</span>`;
+        <span>First census — ${s.n_included ?? s.n_curating || 0} included 21, ${s.n_excluded || 0} excluded 21, ${s.n_no_vector || 0} no vector. Tomorrow’s scan starts the Δ.</span>`;
     } else {
       banner.className = 'alert-banner';
       banner.innerHTML = '';
     }
 
+    const fundsForCounts = d.funds || [];
+    const derived = { include: 0, exclude: 0, none: 0 };
+    fundsForCounts.forEach(f => { derived[rootBasketChoice(f)] = (derived[rootBasketChoice(f)] || 0) + 1; });
+    const nIncluded = s.n_included != null ? s.n_included : derived.include;
+    const nExcluded = s.n_excluded != null ? s.n_excluded : derived.exclude;
+    const nNone = s.n_no_vector != null ? s.n_no_vector : derived.none;
     const cards = [
-      { label: 'Curating 21', value: s.n_curating || 0, unit: `/ ${s.n_all_funds || 0} funds`, accent: '#2563EB' },
-      { label: 'Leftover holders', value: s.n_leftover || 0, unit: 'no 21 weight', accent: '#F59E0B' },
+      { label: 'Included 21', value: nIncluded, unit: 'set weights · chose 21', accent: '#2563EB' },
+      { label: 'Excluded 21', value: nExcluded, unit: 'set weights · skipped 21', accent: '#EF4444' },
+      { label: 'No vector', value: nNone, unit: 'leftover α · no choice', accent: '#F59E0B' },
       { label: 'Realizable τ in 21', value: (s.realizable_tao_21 || 0).toFixed(2), unit: 'τ', accent: '#10B981' },
       { label: 'Significant Δ', value: s.n_significant || 0, unit: d.is_baseline ? 'baseline' : 'vs yesterday', accent: '#8B5CF6' },
     ];
@@ -1965,25 +1992,26 @@ async function loadRootBaskets() {
     const funds = d.funds || [];
     if (!funds.length) {
       tableEl.innerHTML = `<div class="no-data"><strong>No SN21 signal</strong>
-        <span>No root fund is curating 21 or holding leftover SN21 α.</span></div>`;
+        <span>No root fund is including 21 or holding leftover SN21 α.</span></div>`;
       return;
     }
     const rows = funds.map(v => {
+      const choice = rootBasketChoice(v);
       const oursTag = v.is_ours ? ' <span class="house-chip">OURS</span>' : '';
       const houseChip = (v.is_house && !v.is_ours) ? ' <span class="house-chip">HOUSE</span>' : '';
-      const kindChip = v.kind === 'curated'
-        ? ' <span class="house-chip" style="background:rgba(37,99,235,0.12);border-color:rgba(37,99,235,0.4);color:#60A5FA">CURATED</span>'
-        : ' <span class="house-chip" style="background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.4);color:#FBBF24">LEFTOVER</span>';
       const nameText = v.name || `<span style="color:var(--muted)">${v.hotkey_short || '—'}</span>`;
       const name = keyText(v.hotkey, nameText, 'Root validator hotkey');
       const rowStyle = v.is_ours ? ' style="background:rgba(245,158,11,0.05)"'
-        : (v.significant ? ' style="background:rgba(139,92,246,0.04)"' : '');
-      const delta = v.kind === 'curated' && v.share_pp_delta != null
+        : (choice === 'include' ? ' style="background:rgba(37,99,235,0.04)"'
+        : (choice === 'exclude' ? ' style="background:rgba(239,68,68,0.04)"'
+        : ' style="background:rgba(245,158,11,0.04)"'));
+      const delta = choice === 'include' && v.share_pp_delta != null
         ? rootBasketDelta(v.share_pp_delta, ' pp')
         : rootBasketDelta(v.sn21_tao_delta, ' τ');
       return `<tr${rowStyle}>
-        <td>${name}${oursTag}${houseChip}${kindChip}</td>
-        <td class="mono">${v.kind === 'curated' && v.share_pp != null ? v.share_pp.toFixed(2)+'%' : '—'}</td>
+        <td>${name}${oursTag}${houseChip}</td>
+        <td>${rootBasketChoiceChip(choice)}</td>
+        <td class="mono">${choice === 'include' && v.share_pp != null ? v.share_pp.toFixed(2)+'%' : '—'}</td>
         <td class="mono">${v.dests != null ? v.dests : '—'}</td>
         <td class="mono">${v.sn21_tao != null ? Number(v.sn21_tao).toFixed(3) : '—'} τ</td>
         <td class="mono">${v.nav_tao != null ? Number(v.nav_tao).toFixed(1) : '—'} τ</td>
@@ -1992,7 +2020,7 @@ async function loadRootBaskets() {
     }).join('');
     tableEl.innerHTML = `<div class="table-wrap"><table>
       <thead><tr>
-        <th>Fund</th><th>Share</th><th>Dests</th><th>SN21 τ</th><th>Fund NAV</th><th>Δ</th>
+        <th>Fund</th><th>SN21 choice</th><th>Share</th><th>Dests</th><th>SN21 τ</th><th>Fund NAV</th><th>Δ</th>
       </tr></thead>
       <tbody>${rows}</tbody></table></div>`;
   } catch (e) {

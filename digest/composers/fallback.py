@@ -167,16 +167,18 @@ def compose(inputs: dict[str, Any], title: str,
             lines.append("")
             lines.append("ROOT BASKETS")
             lines.append(
-                f"  baseline: {rb.get('n_curating') or 0} curating · "
-                f"{rb.get('n_leftover') or 0} leftover · "
+                f"  baseline: {rb.get('n_included') or rb.get('n_curating') or 0} included · "
+                f"{rb.get('n_excluded') or 0} excluded · "
+                f"{rb.get('n_no_vector') or 0} no vector · "
                 f"{_fmt_num(rb.get('realizable_tao_21'), 2)} τ in 21. No Δ yet."
             )
         elif rb.get("n_significant"):
             lines.append("")
             lines.append("ROOT BASKETS")
             lines.append(
-                f"  curating 21: {rb.get('n_curating') or 0} · "
-                f"leftover: {rb.get('n_leftover') or 0} · "
+                f"  included 21: {rb.get('n_included') or rb.get('n_curating') or 0} · "
+                f"excluded: {rb.get('n_excluded') or 0} · "
+                f"no vector: {rb.get('n_no_vector') or 0} · "
                 f"{_fmt_num(rb.get('realizable_tao_21'), 2)} τ"
             )
             adds = rb.get("adds") or []

@@ -14,6 +14,7 @@ from baskets_scan import (
     digest_payload,
     diff_funds,
     history_row,
+    hydrate_snapshot,
     is_significant,
     normalize_fund,
     parse_holdings,
@@ -71,6 +72,7 @@ def _fund(hotkey, kind, share_pp=0.0, dests=16, sn21_tao=0.0, nav=100.0, name=No
 def test_curated_when_21_in_weights():
     sig = classify(_w((0, 1), (21, 1), (8, 1)), [_h(3, realizable=9.0)])
     assert sig["kind"] == "curated"
+    assert sig["choice"] == "include"
     assert sig["dests"] == 3
     assert abs(sig["share"] - 1 / 3) < 1e-9
 
@@ -78,6 +80,7 @@ def test_curated_when_21_in_weights():
 def test_leftover_when_21_holding_no_weight():
     sig = classify(_w((0, 1), (8, 1)), [_h(21, alpha=10.0, realizable=2.5)])
     assert sig["kind"] == "leftover"
+    assert sig["choice"] == "exclude"
     assert sig["share"] == 0.0
     assert sig["sn21_tao"] == 2.5
     assert sig["sn21_alpha"] == 10.0
@@ -86,6 +89,7 @@ def test_leftover_when_21_holding_no_weight():
 def test_null_strategy_empty_weights_with_holding_is_leftover():
     sig = classify([], [_h(21, realizable=0.4)])
     assert sig["kind"] == "leftover"
+    assert sig["choice"] == "none"
     assert sig["dests"] == 0
 
 
@@ -254,6 +258,9 @@ def test_first_snapshot_is_baseline_no_significance():
     assert snap["is_baseline"] is True
     assert snap["summary"]["is_baseline"] is True
     assert snap["summary"]["n_curating"] == 1
+    assert snap["summary"]["n_included"] == 1
+    assert snap["summary"]["n_excluded"] == 0
+    assert snap["funds"][0]["choice"] == "include"
     assert snap["summary"]["n_significant"] == 0
     assert snap["changes"] == []
     assert snap["funds"][0]["significant"] is False
@@ -310,6 +317,42 @@ def test_history_row_is_compact():
         "adds": ["Rizzo"],
         "drops": [],
     }
+
+
+def test_summarise_splits_exclude_from_no_vector():
+    funds = [
+        _fund(RIZZO, "curated", share_pp=6.25, dests=16, sn21_tao=0.2, name="Rizzo"),
+        _fund(TAOSTATS, "leftover", dests=22, sn21_tao=4.3, name="Taostats"),
+        _fund(OTF, "leftover", dests=0, sn21_tao=6.7, name="OTF"),
+    ]
+    summary = summarise(funds, [], is_baseline=True, n_all_funds=179)
+    assert summary["n_included"] == 1
+    assert summary["n_excluded"] == 1
+    assert summary["n_no_vector"] == 1
+    assert summary["n_leftover"] == 2
+    assert funds[0]["choice"] == "include"
+    assert funds[1]["choice"] == "exclude"
+    assert funds[2]["choice"] == "none"
+
+
+def test_hydrate_old_snapshot_splits_leftover():
+    """Disk rows from before `choice` existed still classify include / exclude / none."""
+    snap = hydrate_snapshot({
+        "summary": {"n_curating": 1, "n_leftover": 2, "realizable_tao_21": 10.0},
+        "funds": [
+            {"hotkey": RIZZO, "kind": "curated", "dests": 16, "sn21_tao": 0.2, "name": "Rizzo"},
+            {"hotkey": TAOSTATS, "kind": "leftover", "dests": 22, "sn21_tao": 4.3, "name": "Taostats"},
+            {"hotkey": OTF, "kind": "leftover", "dests": 0, "sn21_tao": 6.7, "name": "OTF"},
+        ],
+    })
+    assert [f["choice"] for f in snap["funds"]] == ["include", "exclude", "none"]
+    assert snap["summary"]["n_included"] == 1
+    assert snap["summary"]["n_excluded"] == 1
+    assert snap["summary"]["n_no_vector"] == 1
+    payload = digest_payload(snap)
+    assert payload["n_included"] == 1
+    assert payload["n_excluded"] == 1
+    assert payload["n_no_vector"] == 1
 
 
 def test_annotate_house_and_ours():
