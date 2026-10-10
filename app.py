@@ -79,6 +79,7 @@ from dereg_watch import (
     DEREG_WATCH_STORE,
     run_dereg_watch,
 )
+from bot_watch import BOT_WATCH_STORE, run_bot_watch
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -162,7 +163,7 @@ async def login(request: Request):
         max_age=COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=True,  # set False only for local dev
+        secure=os.environ.get("COOKIE_SECURE", "1").lower() not in ("0", "false", "no"),
     )
     return response
 
@@ -350,6 +351,22 @@ async def api_taostats_sync(_=Depends(require_auth)):
         return sync_owner_transfers()
     except Exception as e:
         logger.exception("Taostats sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/bot-watch")
+async def api_bot_watch(_=Depends(require_auth)):
+    """Latest bot map: confidence, sell triggers, and how the crowd answered our clips."""
+    return load_json(BOT_WATCH_STORE, {})
+
+
+@app.post("/api/bot-watch")
+async def api_bot_watch_run(_=Depends(require_auth)):
+    """Run the bot watch now. Same job as the 09:22 UTC daily pass."""
+    try:
+        return run_bot_watch()
+    except Exception as e:
+        logger.exception("Bot watch failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1219,6 +1236,13 @@ def scheduled_dereg_watch():
         logger.exception("Scheduled dereg watch failed")
 
 
+def scheduled_bot_watch():
+    try:
+        run_bot_watch()
+    except Exception:
+        logger.exception("Scheduled bot watch failed")
+
+
 def scheduled_movers_capture():
     try:
         movers_capture()
@@ -1375,6 +1399,12 @@ scheduler.add_job(
     replace_existing=True,
 )
 scheduler.add_job(
+    scheduled_bot_watch,
+    CronTrigger(hour=9, minute=22),
+    id="daily_bot_watch",
+    replace_existing=True,
+)
+scheduler.add_job(
     scheduled_house_miners,
     CronTrigger(hour=9, minute=10),
     id="daily_house_miners",
@@ -1464,7 +1494,7 @@ async def startup():
         for k, cfg in DIGESTS.items()
     ]
     logger.info(
-        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; basket 08:50; neurons-daily 09:00; miner-payouts 09:02; scout 09:15; root-baskets 09:18; weights 09:20 UTC; digests: %s; tier boundaries)",
+        "Data dir: %s — schedulers on (stake-watch 07:30; collect 08:00; market 08:05; Taostats 08:15; subnet 08:30; holders 08:45; basket 08:50; neurons-daily 09:00; miner-payouts 09:02; scout 09:15; root-baskets 09:18; weights 09:20; bot-watch 09:22 UTC; digests: %s; tier boundaries)",
         DATA_DIR, ", ".join(digest_lines) or "none",
     )
 

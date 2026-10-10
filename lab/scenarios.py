@@ -31,6 +31,11 @@ BLOCK_SECONDS = 12
 # 2026-07-29 sat ABOVE SN21's own EMA, scoring us against a number the chain
 # never reads. Extraction now binds on dereg_guard_tao() — the price that still
 # leaves DEREG_BUFFER_MIN subnets below us.
+#
+# Separate object: the AMM residual-TAO floor (`plowest` in lab/amm.py). That is
+# what the SN29 d2tao BIT wants to remove (price can go to zero). It is not the
+# dereg rule. See docs/SN21_AMM_Floor_BIT_2026-08-20.md. S4/S5 still assume
+# constant-product until a live PR is read from source.
 MAX_WEEKLY_PRICE_IMPACT = 0.02    # cap a single week's extraction at 2% price impact
 
 

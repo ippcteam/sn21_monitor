@@ -6,6 +6,12 @@ constant (lab/scenarios.py, root_reborn_model.py) was an unverified assumption a
 by 2026-07-29 was actively misleading — SN21's own EMA had fallen below it, so the
 lab scored "high" dereg risk against a number the chain never reads.
 
+A different object — the AMM residual-TAO price floor (`plowest`) that stops
+alpha from going to zero when everyone unstakes — is documented in
+docs/SN21_AMM_Floor_BIT_2026-08-20.md (SN29 d2tao BIT; proposal only as of
+2026-08-20). That BIT does not change this rank rule. Do not treat a "remove
+the floor" chat as a change to `get_network_to_prune`.
+
 The real rule, read from subtensor `main` and verified live @ block 8,727,955:
 
   * `do_register_network` (subnets/subnet.rs): when

@@ -163,5 +163,8 @@ demand follows substance, and there is no substance here to buy.
    `holders_sync.py` exists; run it and label DSV coldkeys in `wallet_labels.json`.
 3. **Daily bleed monitor** — pool TAO, pool alpha and EMA, with an alert on the 7-day trend. The
    150-day dereg buffer is a function of price and erodes as price falls.
+   The buffer is an EMA *rank*, not the AMM residual-TAO floor — see
+   [SN21_AMM_Floor_BIT_2026-08-20](SN21_AMM_Floor_BIT_2026-08-20.md) if a “remove
+   the floor” pool BIT lands.
 4. **Pull the burn lever and measure** — this is the one action with a known, free, 10× payoff, and
    it doubles as a live test of the gate model's calibration.
