@@ -101,9 +101,9 @@
       font-family: var(--display);
       font-size: 0.75rem;
       font-weight: 600;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
-      padding: 0.4rem 0.9rem;
+      padding: 0.4rem 0.65rem;
       border-radius: 3px;
       border: 1px solid transparent;
       background: transparent;
@@ -565,6 +565,42 @@
     .stage-badge.proposed { background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.4); color: var(--amber); }
     .stage-badge.testnet  { background: rgba(37,99,235,0.12);  border: 1px solid rgba(37,99,235,0.4);  color: var(--blue-lt); }
     .stage-badge.mainnet  { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); color: var(--green); }
+
+    #botsMeta { text-transform: none; }
+    .bots-read {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      line-height: 1.5;
+      margin: -0.5rem 0 1.25rem;
+      max-width: 52rem;
+    }
+    .bot-chip {
+      display: inline-flex; align-items: center;
+      font-family: var(--mono);
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-right: 0.25rem;
+    }
+    .bot-chip.high { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.4); color: var(--green); }
+    .bot-chip.medium { background: rgba(37,99,235,0.12); border-color: rgba(37,99,235,0.4); color: var(--blue-lt); }
+    .bot-chip.low { color: var(--muted); }
+    .bot-chip.up { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.4); color: var(--green); }
+    .bot-chip.down { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.4); color: var(--red); }
+    .bot-chip.new { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.4); color: var(--amber); }
+    #botsTable td, #botsClips td, #botsHandover td { vertical-align: top; }
+    .bot-behaviour {
+      white-space: normal;
+      line-height: 1.45;
+      max-width: 34rem;
+      color: var(--text-dim);
+      font-size: 0.68rem;
+    }
   </style>
 </head>
 <body>
@@ -582,6 +618,7 @@
     <button class="tab-btn" data-tab="neurons">Neurons</button>
     <button class="tab-btn" data-tab="validators">Validators</button>
     <button class="tab-btn" data-tab="movement">Movement</button>
+    <button class="tab-btn" data-tab="bots">Bots</button>
     <button class="tab-btn" data-tab="market">Market</button>
     <button class="tab-btn" data-tab="social">Social</button>
     <button class="tab-btn" data-tab="lab">Lab</button>
@@ -833,6 +870,49 @@
       <div class="loading"><div class="spinner"></div> Loading…</div>
     </div>
   </section><!-- /movement -->
+
+  <!-- ───────────── BOTS TAB ───────────── -->
+  <section class="tab-panel" data-panel="bots">
+    <div class="section-label">
+      Before a clip
+      <span id="botsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+      <button class="btn-sm" style="margin-left:auto" onclick="triggerBotWatch(event)" title="Rescore the bot map from Taostats. Same job as 09:22 UTC.">Run now</button>
+    </div>
+    <p class="bots-read" id="botsRead"></p>
+    <div class="cards-grid" id="botsExpect">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Who answers <span id="botsPlayMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="cards-grid" id="botsPlay">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">What changed</div>
+    <p class="bots-read" id="botsDelta"></p>
+
+    <div class="section-label">Watched wallets</div>
+    <div class="filter-bar">
+      <span class="label">Show</span>
+      <button class="filter-pill active" data-bot-filter="live">Live</button>
+      <button class="filter-pill" data-bot-filter="high">High</button>
+      <button class="filter-pill" data-bot-filter="quiet">Quiet</button>
+      <button class="filter-pill" data-bot-filter="all">All</button>
+    </div>
+    <div class="table-card" id="botsTable">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Coldkey handovers</div>
+    <div class="table-card" id="botsHandover">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+
+    <div class="section-label">Our recent clips <span id="botsClipsMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="table-card" id="botsClips">
+      <div class="loading"><div class="spinner"></div> Loading…</div>
+    </div>
+  </section><!-- /bots -->
 
   <!-- ───────────── MARKET TAB ───────────── -->
   <section class="tab-panel" data-panel="market">
@@ -2481,12 +2561,13 @@ async function triggerSocialCapture() {
 }
 
 /* ── Tab switching ─────────────────────────────────────────────── */
-const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false, market: false, social: false, lab: false };
+const _tabLoaded = { home: true, activity: false, neurons: false, validators: false, movement: false, bots: false, market: false, social: false, lab: false };
 const _tabLoaders = {
   activity:   () => loadActivityTab(),
   neurons:    () => loadNeuronsTab(),
   validators: () => loadValidatorsTab(),
   movement:   () => loadMovementTab(),
+  bots:       () => loadBotsTab(),
   market:     () => loadMarketTab(),
   social:     () => loadSocialTab(),
   lab:        () => loadLabTab(),
@@ -3352,6 +3433,453 @@ async function triggerHoldersSync() {
   } catch (e) { alert(e); }
 }
 
+/* ── Bots tab ─────────────────────────────────────────────────── */
+let _botsDoc = null;
+let _botsFilter = 'live';
+
+const BOT_FAMILY = {
+  same_block_fade: 'Same-block fade',
+  round_clip_fast: 'Fast clip',
+  round_clip_slow: 'Slow clip',
+  accumulator: 'Accumulator',
+  unclassified: 'Unclassified',
+};
+const _BOT_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function fmtTao(n) {
+  if (n === null || n === undefined || n === '') return '—';
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '—';
+  const r = Math.round(x * 10) / 10;
+  return String(r).replace(/\.0$/, '');
+}
+
+function fmtDay(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts).slice(0, 10);
+  return `${d.getUTCDate()} ${_BOT_MONTHS[d.getUTCMonth()]}`;
+}
+
+function fmtUtc(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${d.getUTCDate()} ${_BOT_MONTHS[d.getUTCMonth()]} ${hh}:${mm}`;
+}
+
+function fmtHold(sec) {
+  const s = Number(sec);
+  if (!Number.isFinite(s) || s <= 0) return '';
+  if (s < 90) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min`;
+  const h = s / 3600;
+  return h < 10 ? `${(Math.round(h * 10) / 10).toString().replace(/\.0$/, '')} h` : `${Math.round(h)} h`;
+}
+
+function botClock(w) {
+  const hold = w.hold_median_s;
+  if (w.sell_trigger === 'same_block_own_buy' || w.family === 'same_block_fade') {
+    return { id: 'same', label: 'Same block' };
+  }
+  if (w.sell_trigger === 'after_our_buy') return { id: 'fade', label: 'Into our bid' };
+  if (w.sell_trigger === 'after_our_sell') return { id: 'exit', label: 'After our sell' };
+  if (w.sell_trigger === 'timer_after_own_buy') {
+    if (hold != null && hold <= 600) return { id: 'fast', label: 'Under 10 min' };
+    if (hold != null && hold < 7200) return { id: 'mid', label: 'Under 2 hours' };
+    if (hold != null && hold <= 8 * 3600) return { id: 'slow', label: 'Holds for hours' };
+    return { id: 'timer', label: 'Timer' };
+  }
+  if (w.family === 'accumulator' || !w.sell_tao) return { id: 'hold', label: 'Holding' };
+  return { id: 'other', label: BOT_FAMILY[w.family] || 'Other' };
+}
+
+function botConfRank(w) {
+  return { high: 2, medium: 1, low: 0 }[w.confidence] ?? 0;
+}
+
+function botRows(doc) {
+  return Object.values((doc && doc.wallets) || {});
+}
+
+function botIsLive(w) {
+  return w.status === 'active' && (w.confidence === 'high' || w.confidence === 'medium');
+}
+
+function botFiltered(rows) {
+  if (_botsFilter === 'high') return rows.filter(w => w.confidence === 'high' && w.status !== 'recycled_out');
+  if (_botsFilter === 'quiet') return rows.filter(w => w.status === 'quiet' || w.status === 'recycled_out');
+  if (_botsFilter === 'all') return rows;
+  return rows.filter(botIsLive);
+}
+
+function botChip(text, cls) {
+  return `<span class="bot-chip ${cls}">${escHtml(text)}</span>`;
+}
+
+function botConfChips(w) {
+  const conf = (w.confidence || 'low').toUpperCase();
+  let html = botChip(conf === 'MEDIUM' ? 'MED' : conf, w.confidence || 'low');
+  if (w.confidence_delta === 'upgraded') html += botChip('UP', 'up');
+  else if (w.confidence_delta === 'degraded') html += botChip('DOWN', 'down');
+  else if (w.confidence_delta === 'new') html += botChip('NEW', 'new');
+  if (w.status === 'quiet') html += botChip('QUIET', 'low');
+  else if (w.status === 'recycled_out') html += botChip('RECYCLED', 'down');
+  return html;
+}
+
+function botLagMap(doc) {
+  const map = {};
+  const exp = (doc && doc.expectation) || {};
+  (exp.wallets_that_buy_after_us || []).forEach(r => { map[r.coldkey] = r.median_lag_blocks; });
+  return map;
+}
+
+function botLagText(blocks) {
+  if (blocks === null || blocks === undefined) return '';
+  if (blocks === 0) return 'same block';
+  const sec = Math.abs(blocks) * 12;
+  const t = sec < 90 ? `${sec}s` : `${Math.max(1, Math.round(sec / 60))} min`;
+  return blocks < 0 ? `${t} ahead` : t;
+}
+
+function botRatio(hits, of_) {
+  if (!of_) return '—';
+  return `${hits || 0} / ${of_}`;
+}
+
+function botNameList(rows, limit = 6) {
+  const shown = rows.slice(0, limit);
+  const links = shown.map(w => keyText(w.coldkey, shortKey(w.coldkey, 6, 4), 'Bot coldkey')).join(' · ');
+  const more = rows.length - shown.length;
+  if (!links) return 'None in the live set';
+  return links + (more > 0 ? ` · +${more}` : '');
+}
+
+function botHoldRange(rows) {
+  const holds = rows.map(w => w.hold_median_s).filter(s => s != null && s > 0).sort((a, b) => a - b);
+  if (!holds.length) return '';
+  const a = fmtHold(holds[0]);
+  const b = fmtHold(holds[holds.length - 1]);
+  return a === b ? a : `${a} – ${b}`;
+}
+
+function renderBotsExpect(doc) {
+  const exp = doc.expectation || {};
+  const cards = [
+    {
+      label: 'Other buying after our buy',
+      value: fmtTao(exp.median_reply_buy_tao),
+      unit: 'τ',
+      sub: `median · ${exp.our_buys || 0} of our buys`,
+      accent: '#2563EB',
+    },
+    {
+      label: 'Other selling after our buy',
+      value: fmtTao(exp.median_reply_sell_tao_after_our_buy),
+      unit: 'τ',
+      sub: `median · ${exp.our_buys || 0} of our buys`,
+      accent: '#EF4444',
+    },
+    {
+      label: 'Other selling after our sell',
+      value: fmtTao(exp.median_reply_sell_tao_after_our_sell),
+      unit: 'τ',
+      sub: `median · ${exp.our_sells || 0} of our sells`,
+      accent: '#F59E0B',
+    },
+  ];
+  document.getElementById('botsExpect').innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="card-accent" style="background:${c.accent}"></div>
+      <div class="card-label">${c.label}</div>
+      <div class="card-value">${c.value}<span class="card-unit">${c.unit}</span></div>
+      <div class="card-sub">${c.sub}</div>
+    </div>`).join('');
+
+  const bits = [];
+  if (exp.median_reply_buy_tao != null && exp.median_reply_sell_tao_after_our_buy != null) {
+    bits.push(`After our buys, the median other sell is ${fmtTao(exp.median_reply_sell_tao_after_our_buy)}τ and the median other buy is ${fmtTao(exp.median_reply_buy_tao)}τ.`);
+  }
+  if (exp.median_reply_sell_tao_after_our_sell != null) {
+    bits.push(`After our sells, the median other sell is ${fmtTao(exp.median_reply_sell_tao_after_our_sell)}τ.`);
+  }
+  document.getElementById('botsRead').textContent = bits.join(' ');
+}
+
+function renderBotsPlay(rows) {
+  const live = rows.filter(botIsLive).slice().sort((a, b) =>
+    (b.follow_hits || 0) - (a.follow_hits || 0) || botConfRank(b) - botConfRank(a));
+  const buckets = { same: [], fast: [], mid: [], slow: [], fade: [], exit: [] };
+  live.forEach(w => {
+    const id = botClock(w).id;
+    if (buckets[id]) buckets[id].push(w);
+  });
+  const cards = [
+    { label: 'Same block', rows: buckets.same, accent: '#EF4444', hint: 'Sells in the block it buys', range: false },
+    { label: 'Under 10 min', rows: buckets.fast, accent: '#F59E0B', hint: 'Timer after its own buy', range: true },
+    { label: 'Under 2 hours', rows: buckets.mid, accent: '#8B5CF6', hint: 'Timer, still working out of the print', range: true },
+    { label: 'Holds for hours', rows: buckets.slow, accent: '#2563EB', hint: 'Still in when the fast ones are flat', range: true },
+  ];
+  if (buckets.exit.length) {
+    cards.push({ label: 'Sells when we sell', rows: buckets.exit, accent: '#10b981', hint: 'Dominant sell is inside 6 min of our sell', range: false });
+  }
+  if (buckets.fade.length) {
+    cards.push({ label: 'Sells into our bid', rows: buckets.fade, accent: '#EF4444', hint: 'Dominant sell is inside 6 min of our buy', range: false });
+  }
+  document.getElementById('botsPlayMeta').textContent =
+    ` · ${live.length} live · high or medium, still trading`;
+  document.getElementById('botsPlay').innerHTML = cards.map(c => {
+    const range = c.range ? botHoldRange(c.rows) : '';
+    const sub = c.rows.length
+      ? `${range ? range + ' · ' : ''}${botNameList(c.rows)}`
+      : 'None in the live set';
+    return `<div class="card">
+      <div class="card-accent" style="background:${c.accent}"></div>
+      <div class="card-label">${c.label}</div>
+      <div class="card-value">${c.rows.length}</div>
+      <div class="card-sub">${c.hint}</div>
+      <div class="card-sub">${sub}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderBotsDelta(rows, replacements) {
+  const up = rows.filter(w => w.confidence_delta === 'upgraded');
+  const down = rows.filter(w => w.confidence_delta === 'degraded');
+  const fresh = rows.filter(w => w.confidence_delta === 'new');
+  const bits = [];
+  if (!up.length && !down.length) {
+    bits.push('No wallet stepped up or down on this pass.');
+  } else {
+    if (up.length) bits.push(`${up.length} stepped up: ${up.map(w => shortKey(w.coldkey, 6, 4)).join(', ')}.`);
+    if (down.length) bits.push(`${down.length} stepped down: ${down.map(w => shortKey(w.coldkey, 6, 4)).join(', ')}.`);
+  }
+  if (fresh.length && fresh.length < rows.length) {
+    bits.push(`${fresh.length} scored for the first time.`);
+  } else if (fresh.length && fresh.length === rows.length) {
+    bits.push(`First pass — ${fresh.length} wallets scored.`);
+  }
+  if (replacements.length) {
+    bits.push(`${replacements.length} coldkey handover${replacements.length === 1 ? '' : 's'} in the window.`);
+  }
+  const el = document.getElementById('botsDelta');
+  el.textContent = bits.join(' ');
+}
+
+function renderBotsTable() {
+  const doc = _botsDoc || {};
+  const rows = botRows(doc);
+  const counts = {
+    live: rows.filter(botIsLive).length,
+    high: rows.filter(w => w.confidence === 'high' && w.status !== 'recycled_out').length,
+    quiet: rows.filter(w => w.status === 'quiet' || w.status === 'recycled_out').length,
+    all: rows.length,
+  };
+  const labels = { live: 'Live', high: 'High', quiet: 'Quiet', all: 'All' };
+  document.querySelectorAll('[data-bot-filter]').forEach(b => {
+    const id = b.dataset.botFilter;
+    b.textContent = `${labels[id]} ${counts[id] ?? ''}`.trim();
+  });
+  const el = document.getElementById('botsTable');
+  if (!doc.updated_at) {
+    el.innerHTML = '';
+    return;
+  }
+  const shown = botFiltered(rows).slice().sort((a, b) =>
+    (b.follow_hits || 0) - (a.follow_hits || 0)
+    || botConfRank(b) - botConfRank(a)
+    || (b.buy_tao || 0) - (a.buy_tao || 0));
+  const lags = botLagMap(doc);
+  if (!shown.length) {
+    el.innerHTML = '<div class="no-data"><span>Nothing in this filter</span></div>';
+    return;
+  }
+  const body = shown.map(w => {
+    const lag = lags[w.coldkey];
+    const lagHtml = lag === undefined ? '' : `<div style="color:var(--muted);font-size:0.62rem">${escHtml(botLagText(lag))}</div>`;
+    const took = w.replaced
+      ? `<div style="color:var(--muted);font-size:0.62rem">took over from ${keyText(w.replaced, shortKey(w.replaced, 6, 4), 'Retired coldkey')}</div>`
+      : '';
+    const clock = botClock(w);
+    const hold = fmtHold(w.hold_median_s);
+    const showHold = hold && (
+      clock.id === 'fast' || clock.id === 'mid' || clock.id === 'slow' || clock.id === 'timer'
+      || (clock.id === 'same' && w.hold_median_s > 0 && w.hold_median_s <= 120)
+    );
+    const clockSub = showHold ? `${hold} hold` : (BOT_FAMILY[w.family] || '');
+    return `<tr>
+      <td>
+        <div>${keyText(w.coldkey, shortKey(w.coldkey, 8, 4), 'Bot coldkey')}${walletLink(w.coldkey)}</div>
+        <div style="color:var(--muted);font-size:0.62rem;margin-top:0.15rem">seen ${escHtml(fmtUtc(w.last_seen))}</div>
+        ${took}
+      </td>
+      <td>${botConfChips(w)}</td>
+      <td>
+        <div>${escHtml(clock.label)}</div>
+        ${clockSub ? `<div style="color:var(--muted);font-size:0.62rem">${escHtml(clockSub)}</div>` : ''}
+      </td>
+      <td class="mono">${botRatio(w.follow_hits, w.follow_of)}${lagHtml}</td>
+      <td class="mono">${botRatio(w.sell_after_our_sell_hits, w.sell_after_our_sell_of)}</td>
+      <td class="bot-behaviour">${escHtml(w.behaviour || '')}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="table-header">
+      <span class="table-title">${shown.length} wallet${shown.length === 1 ? '' : 's'}</span>
+      <span style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">sorted by buys after us</span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Wallet</th>
+        <th>Confidence</th>
+        <th>Sell clock</th>
+        <th>Buys after us</th>
+        <th>Sells when we sell</th>
+        <th>Behaviour</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>`;
+}
+
+function renderBotsHandover(replacements) {
+  const el = document.getElementById('botsHandover');
+  if (!replacements.length) {
+    el.innerHTML = '<div class="no-data"><span>No coldkey handover in this window</span></div>';
+    return;
+  }
+  const body = replacements.map(r => `<tr>
+    <td>${keyText(r.retired, shortKey(r.retired, 8, 4), 'Retired coldkey')}${walletLink(r.retired)}</td>
+    <td>${keyText(r.successor, shortKey(r.successor, 8, 4), 'Successor coldkey')}${walletLink(r.successor)}</td>
+    <td>${escHtml(BOT_FAMILY[r.family] || r.family || '—')}</td>
+    <td class="mono">${r.similarity != null ? Number(r.similarity).toFixed(2) : '—'}</td>
+    <td class="bot-behaviour">${escHtml(r.reason || '')}</td>
+  </tr>`).join('');
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>Retired</th><th>Successor</th><th>Family</th><th>Similarity</th><th>Why</th>
+    </tr></thead>
+    <tbody>${body}</tbody>
+  </table></div>`;
+}
+
+function renderBotsClips(moves) {
+  const el = document.getElementById('botsClips');
+  const meta = document.getElementById('botsClipsMeta');
+  const all = (moves || []).slice().reverse();
+  const shown = all.slice(0, 8);
+  meta.textContent = all.length ? ` · latest ${shown.length} of ${all.length}` : '';
+  if (!shown.length) {
+    el.innerHTML = '<div class="no-data"><span>No clip of 5τ or more in the scoring window</span></div>';
+    return;
+  }
+  const body = shown.map(m => {
+    const side = m.action === 'stake' ? 'Buy' : 'Sell';
+    const sideColor = m.action === 'stake' ? 'var(--green)' : 'var(--red)';
+    const replies = m.reply_wallets || [];
+    let who = '<span style="color:var(--muted)">none of the watched wallets</span>';
+    if (replies.length) {
+      const lines = replies.map(r => {
+        const verb = r.action === 'stake' ? 'bought' : 'sold';
+        return `${keyText(r.coldkey, shortKey(r.coldkey, 6, 4), 'Bot coldkey')} ${verb} ${fmtTao(r.tao)}τ · ${escHtml(botLagText(r.lag_blocks))}`;
+      }).join('<br>');
+      who = replies.length > 3
+        ? `<details><summary style="cursor:pointer;color:var(--text-dim)">${replies.length} watched</summary><div style="margin-top:0.35rem">${lines}</div></details>`
+        : lines;
+    }
+    return `<tr>
+      <td class="mono" title="block ${escHtml(m.block)}">${escHtml(fmtUtc(m.ts))}</td>
+      <td style="color:${sideColor}">${side}</td>
+      <td class="mono">${fmtTao(m.tao)}τ</td>
+      <td class="mono">${fmtTao(m.reply_buy_tao)}τ</td>
+      <td class="mono">${fmtTao(m.reply_sell_tao)}τ</td>
+      <td class="bot-behaviour">${who}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>Time (UTC)</th><th>Side</th><th>Size</th><th>Other buy</th><th>Other sell</th><th>Watched wallets</th>
+    </tr></thead>
+    <tbody>${body}</tbody>
+  </table></div>`;
+}
+
+function renderBotsEmpty(message, detail) {
+  document.getElementById('botsMeta').textContent = '';
+  document.getElementById('botsRead').textContent = '';
+  document.getElementById('botsPlayMeta').textContent = '';
+  document.getElementById('botsDelta').textContent = '';
+  document.getElementById('botsClipsMeta').textContent = '';
+  document.getElementById('botsExpect').innerHTML =
+    `<div class="no-data"><strong>${escHtml(message)}</strong><span>${detail}</span></div>`;
+  document.getElementById('botsPlay').innerHTML = '';
+  document.getElementById('botsTable').innerHTML = '';
+  document.getElementById('botsHandover').innerHTML = '';
+  document.getElementById('botsClips').innerHTML = '';
+}
+
+function renderBots(d) {
+  _botsDoc = d || {};
+  if (!_botsDoc.updated_at) {
+    renderBotsEmpty('No bot watch yet', 'The daily pass runs at 09:22 UTC. <button class="btn-sm" onclick="triggerBotWatch(event)">Run now</button>');
+    return;
+  }
+  const ours = _botsDoc.ours || [];
+  const oursHtml = ours.length
+    ? keyText(ours[0], shortKey(ours[0], 8, 6), 'Our clip wallet') + (ours.length > 1 ? ` +${ours.length - 1}` : '')
+    : '—';
+  document.getElementById('botsMeta').innerHTML =
+    ` · ${escHtml(fmtUtc(_botsDoc.updated_at))} UTC · ${escHtml(fmtDay(_botsDoc.window_start))} – ${escHtml(fmtDay(_botsDoc.window_end))} · ${oursHtml}`;
+  const rows = botRows(_botsDoc);
+  renderBotsExpect(_botsDoc);
+  renderBotsPlay(rows);
+  renderBotsDelta(rows, _botsDoc.replacements || []);
+  renderBotsTable();
+  renderBotsHandover(_botsDoc.replacements || []);
+  renderBotsClips(_botsDoc.our_moves || []);
+}
+
+async function loadBotsTab() {
+  try {
+    const r = await fetch('/api/bot-watch', { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('Bot watch failed (' + r.status + ')');
+    renderBots(await r.json());
+  } catch (e) {
+    renderBotsEmpty('Failed to load bot watch', escHtml(e.message || e));
+  }
+}
+
+async function triggerBotWatch(ev) {
+  const btn = ev && ev.currentTarget;
+  const label = btn ? btn.textContent : 'Run now';
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+    const r = await fetch('/api/bot-watch', { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) {
+      let detail = String(r.status);
+      try { const body = await r.json(); detail = body.detail || detail; } catch (_) {}
+      alert('Bot watch failed (' + detail + ')');
+      return;
+    }
+    const d = await r.json();
+    if (d.skipped) { alert(d.reason || 'Bot watch skipped'); return; }
+    _tabLoaded.bots = true;
+    renderBots(d);
+  } catch (e) {
+    alert(e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
 function activateTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === name);
@@ -3378,8 +3906,16 @@ document.querySelectorAll('[data-house-filter]').forEach(b => {
   });
 });
 
+document.querySelectorAll('[data-bot-filter]').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('[data-bot-filter]').forEach(x => x.classList.toggle('active', x === b));
+    _botsFilter = b.dataset.botFilter;
+    renderBotsTable();
+  });
+});
+
 const initialTab = (location.hash || '').replace('#', '');
-if (initialTab && ['home','activity','neurons','validators','movement','market','social','lab'].includes(initialTab)) {
+if (initialTab && ['home','activity','neurons','validators','movement','bots','market','social','lab'].includes(initialTab)) {
   activateTab(initialTab);
 }
 
