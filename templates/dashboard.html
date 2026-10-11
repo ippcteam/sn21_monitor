@@ -178,8 +178,13 @@
       margin-bottom: 2rem;
     }
 
-    @media (max-width: 1100px) { .cards-grid { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 500px) { .cards-grid { grid-template-columns: 1fr; } }
+    .cards-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+    @media (max-width: 1100px) {
+      .cards-grid, .cards-grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 500px) {
+      .cards-grid, .cards-grid.cols-4 { grid-template-columns: 1fr; }
+    }
 
     .card {
       background: var(--surface);
@@ -643,6 +648,20 @@
   <div class="cards-grid" id="cardsGrid">
     <div class="loading"><div class="spinner"></div> Loading…</div>
   </div>
+
+  <!-- ── Our wallets · current balances ── -->
+  <div class="section-label">
+    Our Wallets
+    <span id="walletBalMeta" style="font-weight:400;letter-spacing:0;color:var(--muted)"></span>
+    <button class="btn-sm" style="margin-left:auto" onclick="triggerWalletBalances()" title="Taostats account balance for the owner, miner, and validator coldkeys">Sync now</button>
+  </div>
+  <p style="font-family:var(--mono);font-size:0.68rem;color:var(--muted);margin:-0.4rem 0 0.85rem;line-height:1.45;max-width:72rem">
+    Alpha is SN21 stake on the coldkey. TAO and USD are the full wallet — free TAO plus every stake, marked to TAO.
+  </p>
+  <div class="cards-grid cols-4" id="walletBalCards">
+    <div class="loading"><div class="spinner"></div> Loading…</div>
+  </div>
+  <div class="table-card" id="walletBalTable" style="margin-top:-0.5rem;margin-bottom:2rem"></div>
 
   <!-- ── House Earnings · Current Mining Week ── -->
   <div class="section-label">
@@ -1357,6 +1376,116 @@ async function triggerHouseSnapshot() {
   } catch (e) { alert(e); }
 }
 
+/* ── Our wallets · alpha / TAO / USD ─────────────────────────── */
+function walletMoney(fig) {
+  if (!fig || (fig.sn21_alpha == null && fig.total_tao == null)) {
+    return { alpha: '—', tao: '—', usd: '—' };
+  }
+  return {
+    alpha: fmtAlphaSafe(fig.sn21_alpha, 2) + ' α',
+    tao: fig.total_tao != null ? fmt(fig.total_tao, 4) + ' τ' : '—',
+    usd: fig.usd != null ? fmtUsd(fig.usd) : '—',
+  };
+}
+
+async function loadWalletBalances() {
+  const cardsEl = document.getElementById('walletBalCards');
+  const tableEl = document.getElementById('walletBalTable');
+  const meta = document.getElementById('walletBalMeta');
+  try {
+    const r = await fetch('/api/wallets/balances');
+    const d = await r.json();
+    if (d.error || !(d.wallets || []).length) {
+      cardsEl.innerHTML = '';
+      tableEl.innerHTML = `<div class="no-data"><strong>${d.error || 'No wallet balances yet'}</strong>
+        <span>Owner, miner, and validator coldkeys.
+        <button class="btn-sm" onclick="triggerWalletBalances()">Sync now</button></span></div>`;
+      if (meta) meta.textContent = '';
+      return;
+    }
+    const when = (d.fetched_at_utc || '').replace('T', ' ').slice(0, 16);
+    const price = d.tao_price_usd != null ? ' · τ $' + fmt(d.tao_price_usd, 2) : '';
+    if (meta) meta.textContent = ' · ' + when + ' UTC' + price + (d.stale ? ' · stale' : '');
+
+    const roleCards = [
+      { key: 'owner', label: 'Owner', accent: '#F59E0B' },
+      { key: 'miner', label: 'Miners', accent: '#10b981' },
+      { key: 'validator', label: 'Validator', accent: '#2563EB' },
+    ];
+    const cards = roleCards.map(c => {
+      const fig = (d.roles || {})[c.key] || {};
+      const m = walletMoney(fig);
+      const n = fig.n != null ? ` · ${fig.n} wallet${fig.n === 1 ? '' : 's'}` : '';
+      return `<div class="card">
+        <div class="card-accent" style="background:${c.accent}"></div>
+        <div class="card-label">${c.label}</div>
+        <div class="card-value">${m.usd || '—'}</div>
+        <div class="card-sub">${m.alpha} · ${m.tao}${n}</div>
+      </div>`;
+    });
+    const tot = walletMoney(d.total || {});
+    cards.push(`<div class="card">
+      <div class="card-accent" style="background:#8B5CF6"></div>
+      <div class="card-label">Combined</div>
+      <div class="card-value">${tot.usd || '—'}</div>
+      <div class="card-sub">${tot.alpha} · ${tot.tao} · unique coldkeys</div>
+    </div>`);
+    cardsEl.innerHTML = cards.join('');
+
+    const seen = {};
+    const rows = (d.wallets || []).map(w => {
+      const m = walletMoney(w);
+      const dup = w.coldkey && seen[w.coldkey];
+      if (w.coldkey) seen[w.coldkey] = true;
+      const stale = w.stale ? ' <span style="color:var(--amber)">stale</span>' : '';
+      const err = w.error ? `<div style="color:var(--muted);font-size:0.62rem">${escHtml(w.error)}</div>` : '';
+      const same = dup ? `<div style="color:var(--muted);font-size:0.62rem">same coldkey as above</div>` : '';
+      const split = (w.free_tao != null || w.sn21_tao != null)
+        ? `<div style="color:var(--muted);font-size:0.62rem">free ${w.free_tao != null ? fmt(w.free_tao, 2) : '—'} τ · SN21 ${w.sn21_tao != null ? fmt(w.sn21_tao, 2) : '—'} τ</div>`
+        : '';
+      const detail = w.detail ? `<div style="color:var(--muted);font-size:0.62rem">${escHtml(w.detail)}</div>` : '';
+      return `<tr>
+        <td>${escHtml(w.label || w.role)}${detail}${same}${err}</td>
+        <td style="text-align:right;white-space:nowrap">${m.alpha}</td>
+        <td style="text-align:right;white-space:nowrap">${m.tao}${split}</td>
+        <td style="text-align:right;white-space:nowrap">${m.usd}</td>
+        <td class="mono">${w.coldkey ? keyText(w.coldkey, w.coldkey_short, 'Wallet (coldkey)') : '—'}${stale}</td>
+      </tr>`;
+    }).join('');
+    tableEl.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr>
+        <th>Key</th>
+        <th style="text-align:right">Alpha</th>
+        <th style="text-align:right">TAO</th>
+        <th style="text-align:right">USD</th>
+        <th>Coldkey</th>
+      </tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  } catch (e) {
+    cardsEl.innerHTML = '';
+    tableEl.innerHTML = `<div class="no-data"><strong>Failed to load wallet balances</strong><span>${e}</span></div>`;
+  }
+}
+
+async function triggerWalletBalances() {
+  const btn = event && event.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  try {
+    const res = await fetch('/api/wallets/balances/sync', { method: 'POST', credentials: 'same-origin' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || ('HTTP ' + res.status));
+    }
+    await loadWalletBalances();
+    if (btn) btn.textContent = 'Synced ✓';
+  } catch (e) {
+    if (btn) btn.textContent = 'Failed';
+    alert(e instanceof Error ? e.message : e);
+  } finally {
+    if (btn) setTimeout(() => { btn.disabled = false; btn.textContent = 'Sync now'; }, 1500);
+  }
+}
+
 async function loadSummary() {
   const r = await fetch('/api/summary');
   const d = await r.json();
@@ -1411,30 +1540,6 @@ async function loadSummary() {
       sub: 'Cumulative ξ · pool total ' + fmt(d.running_total_alpha, 4) + ' ξ'
         + (d.running_total_our_usd != null ? ' · ' + fmtUsd(d.running_total_our_usd) + ' (sum of daily USD est.)' : ''),
       accent: '#F59E0B',
-    },
-    {
-      label: 'Wallet balance (on-chain)',
-      value: d.wallet?.balance_total_tao != null ? fmt(d.wallet.balance_total_tao, 4) : '—',
-      unit: 'τ',
-      delta: fmtDelta(d.wallet?.balance_change_24h_pct),
-      sub: d.wallet?.balance_total_tao != null
-        ? 'block ' + (d.wallet.block_number ? d.wallet.block_number.toLocaleString() : '—')
-          + ' · ' + (d.wallet.alpha_balances?.length || 0) + ' subnet position(s)'
-        : 'Run Taostats sync to populate',
-      accent: '#10b981',
-    },
-    {
-      label: 'Wallet value (USD)',
-      value: d.wallet?.balance_total_usd != null ? fmtUsd(d.wallet.balance_total_usd) : '—',
-      unit: '',
-      delta: fmtDelta(d.wallet?.balance_change_24h_pct),
-      sub: d.wallet?.balance_total_tao != null && d.tao_price_usd != null
-        ? fmt(d.wallet.balance_total_tao, 4) + ' τ × $' + fmt(d.tao_price_usd, 2)
-          + (d.wallet?.balance_24h_ago_usd != null
-              ? ' · 24h ago ' + fmtUsd(d.wallet.balance_24h_ago_usd)
-              : '')
-        : 'TAO price unavailable',
-      accent: '#10b981',
     },
     {
       label: 'Alpha Price',
@@ -1716,6 +1821,8 @@ async function triggerCollect() {
     await sleep(300);
     const taoRes = await _post('/api/taostats/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
     await sleep(300);
+    const walRes = await _post('/api/wallets/balances/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
+    await sleep(300);
     const subRes = await _post('/api/subnet/sync').catch(e => ({ ok: false, body: { detail: String(e) } }));
     await sleep(300);
     const houseRes = await _post('/api/house/snapshot').catch(e => ({ ok: false, body: { detail: String(e) } }));
@@ -1723,6 +1830,7 @@ async function triggerCollect() {
     const failures = [];
     if (!collectRes.ok) failures.push('collect: ' + (collectRes.body?.detail || collectRes.status));
     if (!taoRes.ok)     failures.push('taostats: ' + (taoRes.body?.detail || taoRes.status));
+    if (!walRes.ok)     failures.push('wallets: ' + (walRes.body?.detail || walRes.status));
     if (!subRes.ok)     failures.push('subnet: ' + (subRes.body?.detail || subRes.status));
     if (!houseRes.ok)   failures.push('house snapshot: ' + (houseRes.body?.detail || houseRes.status));
 
@@ -1754,6 +1862,7 @@ async function triggerCollect() {
 
 async function init() {
   const summary = await loadSummary();
+  await loadWalletBalances();
   if (!summary) return;
   const history = await loadHistory();
   buildCharts(history);
