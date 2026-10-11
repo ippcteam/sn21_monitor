@@ -641,6 +641,24 @@ async def api_miner_payouts_sync(_=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/wallets/balances")
+async def api_wallet_balances(_=Depends(require_auth)):
+    """Latest alpha / TAO / USD balances for the owner, miner, and validator coldkeys."""
+    from wallet_balances import get_wallet_balances
+    return get_wallet_balances()
+
+
+@app.post("/api/wallets/balances/sync")
+async def api_wallet_balances_sync(_=Depends(require_auth)):
+    """Refresh those coldkey balances from Taostats."""
+    try:
+        from wallet_balances import build_wallet_balances
+        return build_wallet_balances()
+    except Exception as e:
+        logger.exception("Wallet balances sync failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/house/miners")
 async def api_house_miners(_=Depends(require_auth)):
     """In-house miners: alpha holding ('my money') + rolling 4-week earnings & trend."""
@@ -1102,6 +1120,11 @@ def scheduled_taostats_sync():
         sync_owner_transfers()
     except Exception:
         logger.exception("Scheduled Taostats sync failed")
+    try:
+        from wallet_balances import build_wallet_balances
+        build_wallet_balances()
+    except Exception:
+        logger.exception("Scheduled wallet-balance sync failed")
 
 
 def scheduled_subnet_sync():
