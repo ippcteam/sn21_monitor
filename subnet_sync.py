@@ -2,10 +2,10 @@
 Subnet 21 daily activity sync. Pulls 24h pool volumes + subnet hyperparams from
 Taostats and appends a daily row to data/subnet_daily.json. Powers the Activity tab.
 
-Sources verified against the Taostats Pro API:
-  GET /api/dtao/pool/latest/v1?netuid=21          → 24h buy/sell volumes, buyers/sellers
-  GET /api/subnet/latest/v1?netuid=21             → validators, miners, burn fields
-  GET /api/dtao/stake_balance/latest/v1?netuid=21 → subnet_total_holders (only need first row)
+Sources:
+  GET /v1/subnets/pools and /v1/subnets/pools/aggregate?netuid=21
+  GET /v1/subnets/metrics and /v1/subnets/hyperparameters?netuid=21
+  GET /v1/alpha/leaderboard?netuid=21             → subnet_total_holders (first row)
 """
 
 from __future__ import annotations
@@ -21,6 +21,16 @@ import requests
 
 from collector import save_json, load_json
 from config import DATA_DIR
+from taostats_v1 import (
+    PATH_ALPHA_LEADERBOARD,
+    PATH_POOLS,
+    PATH_POOLS_AGGREGATE,
+    PATH_SUBNET_HYPERPARAMETERS,
+    PATH_SUBNET_METRICS,
+    leaderboard_params,
+    legacy_pool,
+    legacy_subnet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +38,11 @@ TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io
 NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 
-POOL_LATEST_PATH = "/api/dtao/pool/latest/v1"
-SUBNET_LATEST_PATH = "/api/subnet/latest/v1"
-STAKE_BALANCE_LATEST_PATH = "/api/dtao/stake_balance/latest/v1"
+POOL_LATEST_PATH = PATH_POOLS
+POOL_AGGREGATE_PATH = PATH_POOLS_AGGREGATE
+SUBNET_LATEST_PATH = PATH_SUBNET_METRICS
+SUBNET_HYPERPARAMETERS_PATH = PATH_SUBNET_HYPERPARAMETERS
+STAKE_BALANCE_LATEST_PATH = PATH_ALPHA_LEADERBOARD
 
 SUBNET_DAILY_STORE = DATA_DIR / "subnet_daily.json"
 RETENTION_DAYS = 365
@@ -88,12 +100,18 @@ def _get(session: requests.Session, path: str, params: dict[str, Any]) -> dict[s
     return r.json()
 
 
+def _first_row(session: requests.Session, path: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    rows = _get(session, path, params).get("data") or []
+    return rows[0] if rows else None
+
+
 def fetch_pool_latest(session: requests.Session) -> dict[str, Any] | None:
-    body = _get(session, POOL_LATEST_PATH, {"netuid": NETUID})
-    rows = body.get("data") or []
-    if not rows:
+    pool = _first_row(session, POOL_LATEST_PATH, {"netuid": NETUID})
+    if pool is None:
         return None
-    r = rows[0]
+    _time.sleep(INTER_CALL_SLEEP)
+    aggregate = _first_row(session, POOL_AGGREGATE_PATH, {"netuid": NETUID})
+    r = legacy_pool(pool, aggregate)
     return {
         "block_number": r.get("block_number"),
         "timestamp": r.get("timestamp"),
@@ -121,11 +139,12 @@ def fetch_pool_latest(session: requests.Session) -> dict[str, Any] | None:
 
 
 def fetch_subnet_latest(session: requests.Session) -> dict[str, Any] | None:
-    body = _get(session, SUBNET_LATEST_PATH, {"netuid": NETUID})
-    rows = body.get("data") or []
-    if not rows:
+    metrics = _first_row(session, SUBNET_LATEST_PATH, {"netuid": NETUID})
+    if metrics is None:
         return None
-    r = rows[0]
+    _time.sleep(INTER_CALL_SLEEP)
+    hyper = _first_row(session, SUBNET_HYPERPARAMETERS_PATH, {"netuid": NETUID})
+    r = legacy_subnet(metrics, hyper)
     return {
         "block_number": r.get("block_number"),
         "timestamp": r.get("timestamp"),
@@ -152,7 +171,7 @@ def fetch_subnet_latest(session: requests.Session) -> dict[str, Any] | None:
 
 
 def fetch_total_holders(session: requests.Session) -> int | None:
-    body = _get(session, STAKE_BALANCE_LATEST_PATH, {"netuid": NETUID, "limit": 1})
+    body = _get(session, STAKE_BALANCE_LATEST_PATH, leaderboard_params(netuid=NETUID, limit=1))
     rows = body.get("data") or []
     if not rows:
         return None

@@ -9,10 +9,10 @@ economics of running our validator there:
 
 Reads only the Taostats endpoints already wired into the dashboard:
 
-  /api/metagraph/latest/v1       — stake ladder + per-UID validator emissions
-  /api/dtao/pool/latest/v1       — AMM reserves + 24h volume
-  /api/subnet/latest/v1          — burn, registration cost, validator/miner counts
-  /api/dtao/stake_balance/latest/v1 — total holders
+  /v1/subnets/metagraph          — stake ladder + per-UID validator emissions
+  /v1/subnets/pools and /pools/aggregate — AMM reserves + 24h volume
+  /v1/subnets/metrics and /hyperparameters — burn, registration, counts
+  /v1/alpha/leaderboard          — total holders
 
 Writes:
 
@@ -34,15 +34,30 @@ import requests
 
 from collector import load_json, save_json
 from config import DATA_DIR
+from taostats_v1 import (
+    PATH_ALPHA_LEADERBOARD,
+    PATH_METAGRAPH,
+    PATH_POOLS,
+    PATH_POOLS_AGGREGATE,
+    PATH_PRICE,
+    PATH_SUBNET_HYPERPARAMETERS,
+    PATH_SUBNET_METRICS,
+    leaderboard_params,
+    legacy_metagraph_row,
+    legacy_pool,
+    legacy_subnet,
+)
 
 logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-METAGRAPH_PATH = "/api/metagraph/latest/v1"
-POOL_PATH = "/api/dtao/pool/latest/v1"
-SUBNET_PATH = "/api/subnet/latest/v1"
-STAKE_BALANCE_PATH = "/api/dtao/stake_balance/latest/v1"
-PRICE_PATH = "/api/price/latest/v1"
+METAGRAPH_PATH = PATH_METAGRAPH
+POOL_PATH = PATH_POOLS
+POOL_AGGREGATE_PATH = PATH_POOLS_AGGREGATE
+SUBNET_PATH = PATH_SUBNET_METRICS
+SUBNET_HYPERPARAMETERS_PATH = PATH_SUBNET_HYPERPARAMETERS
+STAKE_BALANCE_PATH = PATH_ALPHA_LEADERBOARD
+PRICE_PATH = PATH_PRICE
 
 NETUID_SN21 = 21
 RAO_PER_TAO = 1_000_000_000
@@ -136,7 +151,7 @@ def _fetch_metagraph(session, netuid: int) -> list[dict[str, Any]]:
     page = 1
     while True:
         body = _get_json(session, METAGRAPH_PATH, {"netuid": netuid, "limit": 100, "page": page})
-        page_rows = body.get("data") or []
+        page_rows = [legacy_metagraph_row(r) for r in (body.get("data") or [])]
         rows.extend(page_rows)
         pag = body.get("pagination") or {}
         if not page_rows or not pag.get("next_page") or page >= (pag.get("total_pages") or 0):
@@ -148,22 +163,32 @@ def _fetch_metagraph(session, netuid: int) -> list[dict[str, Any]]:
     return rows
 
 
-def _fetch_pool(session, netuid: int):
-    body = _get_json(session, POOL_PATH, {"netuid": netuid})
-    rows = body.get("data") or []
+def _first_row(session, path: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    rows = _get_json(session, path, params).get("data") or []
     return rows[0] if rows else None
+
+
+def _fetch_pool(session, netuid: int):
+    pool = _first_row(session, POOL_PATH, {"netuid": netuid})
+    if pool is None:
+        return None
+    time.sleep(1.0)
+    aggregate = _first_row(session, POOL_AGGREGATE_PATH, {"netuid": netuid})
+    return legacy_pool(pool, aggregate)
 
 
 def _fetch_subnet(session, netuid: int):
-    body = _get_json(session, SUBNET_PATH, {"netuid": netuid})
-    rows = body.get("data") or []
-    return rows[0] if rows else None
+    metrics = _first_row(session, SUBNET_PATH, {"netuid": netuid})
+    if metrics is None:
+        return None
+    time.sleep(1.0)
+    hyper = _first_row(session, SUBNET_HYPERPARAMETERS_PATH, {"netuid": netuid})
+    return legacy_subnet(metrics, hyper)
 
 
 def _fetch_holders(session, netuid: int):
-    body = _get_json(session, STAKE_BALANCE_PATH, {"netuid": netuid, "limit": 1})
-    rows = body.get("data") or []
-    return rows[0].get("subnet_total_holders") if rows else None
+    row = _first_row(session, STAKE_BALANCE_PATH, leaderboard_params(netuid=netuid, limit=1))
+    return row.get("subnet_total_holders") if row else None
 
 
 def _fetch_tao_usd(session):

@@ -2,7 +2,7 @@
 SN21 validator-basket sync — which named network operators have SN21 α
 staked to their hotkey.
 
-Source: GET /api/dtao/validator/available/v1?netuid=21
+Source: GET /v1/validators/active?netuid=21
 Optional join: latest holders snapshot (nominator counts per hotkey).
 
 This is the live dTAO basket (operators who accept SN21 stake), not a
@@ -26,16 +26,15 @@ import requests
 from collector import load_json, save_json
 from config import DATA_DIR
 from labels import house_set, is_house
+from taostats_v1 import PATH_VALIDATORS_ACTIVE
 
 logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-AVAILABLE_PATH = "/api/dtao/validator/available/v1"
+AVAILABLE_PATH = PATH_VALIDATORS_ACTIVE
 NETUID = int(os.environ.get("SN21_NETUID", "21"))
 RAO_PER_TAO = 1_000_000_000
-PAGE_SIZE = 200
 MAX_429_RETRIES = 6
-INTER_PAGE_SLEEP = 0.8
 
 OUR_VALIDATOR_HOTKEY = (
     os.environ.get("OUR_VALIDATOR_HOTKEY")
@@ -277,38 +276,26 @@ def build_snapshot(
 
 
 def _fetch_available(session: requests.Session) -> list[dict[str, Any]]:
+    """One unpaged read. `/v1/validators/active` rejects `page` and `limit`."""
     url = f"{TAOSTATS_API_BASE}{AVAILABLE_PATH}"
-    rows: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        params = {"netuid": NETUID, "limit": PAGE_SIZE, "page": page}
-        body: dict[str, Any] | None = None
-        for attempt in range(MAX_429_RETRIES):
-            r = session.get(url, params=params, timeout=60)
-            if r.status_code == 429:
-                wait = min(2 ** attempt + 1.0, 30)
-                logger.warning("Basket sync 429 on page %s; retry in %.1fs", page, wait)
-                _time.sleep(wait)
-                continue
-            r.raise_for_status()
-            body = r.json()
-            break
-        if body is None:
-            r = session.get(url, params=params, timeout=60)
-            r.raise_for_status()
-            body = r.json()
-        chunk = body.get("data") or []
-        rows.extend(chunk)
-        pag = body.get("pagination") or {}
-        next_page = pag.get("next_page")
-        total_pages = pag.get("total_pages") or 0
-        if not chunk or not next_page or page >= total_pages:
-            break
-        page = int(next_page)
-        if page > 20:
-            break
-        _time.sleep(INTER_PAGE_SLEEP)
-    return rows
+    params = {"netuid": NETUID}
+    body: dict[str, Any] | None = None
+    for attempt in range(MAX_429_RETRIES):
+        r = session.get(url, params=params, timeout=60)
+        if r.status_code == 429:
+            wait = min(2 ** attempt + 1.0, 30)
+            logger.warning("Basket sync 429; retry in %.1fs", wait)
+            _time.sleep(wait)
+            continue
+        r.raise_for_status()
+        body = r.json()
+        break
+    if body is None:
+        r = session.get(url, params=params, timeout=60)
+        r.raise_for_status()
+        body = r.json()
+    data = body.get("data") or []
+    return data if isinstance(data, list) else [data]
 
 
 def _prior_validators() -> list[dict[str, Any]] | None:

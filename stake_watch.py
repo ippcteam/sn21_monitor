@@ -12,7 +12,7 @@ This module pulls that series from Taostats `dtao/stake_balance` (history + late
 measures inflow over a rolling lookback window, and raises a Telegram alert when a full
 day passes with no meaningful inflow (i.e. the owner key holder's daily push stalled).
 
-Docs: https://docs.taostats.io/reference — GET /api/dtao/stake_balance/{history,latest}/v1
+History: GET /v1/alpha/history (one end-of-day row). Latest: GET /v1/alpha/leaderboard.
 """
 
 from __future__ import annotations
@@ -26,12 +26,13 @@ import requests
 
 from collector import load_json, save_json
 from config import DATA_DIR
+from taostats_v1 import PATH_ALPHA_HISTORY, PATH_ALPHA_LEADERBOARD, leaderboard_params
 
 logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-HISTORY_PATH = "/api/dtao/stake_balance/history/v1"
-LATEST_PATH = "/api/dtao/stake_balance/latest/v1"
+HISTORY_PATH = PATH_ALPHA_HISTORY
+LATEST_PATH = PATH_ALPHA_LEADERBOARD
 
 NETUID = int(os.environ.get("SN21_NETUID", "21"))
 # Our owner-share recipient coldkey (the wallet the shares are staked *onto*).
@@ -114,7 +115,7 @@ def fetch_series(session: requests.Session, limit: int = 30) -> list[dict[str, A
             "balance_as_tao": float(row.get("balance_as_tao") or 0) / RAO_PER_ALPHA,
         }
 
-    latest_rows = _get(session, LATEST_PATH, base).get("data") or []
+    latest_rows = _get(session, LATEST_PATH, leaderboard_params(**base)).get("data") or []
     for row in latest_rows:
         ts = row.get("timestamp")
         if ts:

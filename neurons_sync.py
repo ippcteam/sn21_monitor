@@ -1,7 +1,7 @@
 """
 SN21 neurons (validators + miners) view powered by Taostats metagraph endpoint.
 
-Source: GET /api/metagraph/latest/v1?netuid=21 (256 UIDs, paginated 100 per page).
+Source: GET /v1/subnets/metagraph?netuid=21 (256 UIDs, paginated 100 per page).
 Per-UID fields verified live: uid, hotkey, coldkey, validator_permit, active,
 incentive, dividends, emission, daily_mining_alpha, daily_burned_alpha,
 daily_validating_alpha, daily_owner_alpha (+ *_as_tao), axon, updated,
@@ -28,12 +28,13 @@ from typing import Any
 import requests
 
 from labels import auto_label_owner_hotkey, house_set, is_house
+from taostats_v1 import PATH_METAGRAPH, legacy_metagraph_row
 from windows import current_window, is_submitting_in_window, ET
 
 logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-METAGRAPH_LATEST_PATH = "/api/metagraph/latest/v1"
+METAGRAPH_LATEST_PATH = PATH_METAGRAPH
 NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 100
@@ -105,7 +106,7 @@ def _fetch_all_uids(session: requests.Session) -> tuple[list[dict[str, Any]], in
     timestamp: str | None = None
     while True:
         body = _fetch_page(session, page)
-        page_rows = body.get("data") or []
+        page_rows = [legacy_metagraph_row(r) for r in (body.get("data") or [])]
         rows.extend(page_rows)
         for r in page_rows:
             if block_number is None:
