@@ -21,7 +21,7 @@ Direct-chain like collector.py / weights_scan.py; reuses the same SSL fix so the
 WebSocket chain connection verifies on minimal Render images.
 
 Fallback (not implemented): if a future SDK rename breaks all_subnets(), the same
-per-subnet reserves are available via Taostats /api/dtao/pool/latest/v1 (see subnet_scan.py).
+per-subnet reserves are available via Taostats /v1/subnets/pools (see subnet_scan.py).
 """
 
 from __future__ import annotations

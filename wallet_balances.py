@@ -23,6 +23,7 @@ from config import DATA_DIR
 from labels import DEFAULT_HOUSE_KEYS
 from stake_watch import OUR_VALIDATOR_HOTKEY, OWNER_SHARE_COLDKEY
 from taostats_sync import _api_key, _headers, fetch_owner_balance
+from taostats_v1 import PATH_METAGRAPH
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ WALLET_BALANCES_STORE = DATA_DIR / "wallet_balances.json"
 NETUID = int(os.environ.get("SN21_NETUID", "21"))
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-METAGRAPH_LATEST_PATH = "/api/metagraph/latest/v1"
+METAGRAPH_LATEST_PATH = PATH_METAGRAPH
 
 
 def _short(addr: str | None, head: int = 8, tail: int = 4) -> str | None:

@@ -33,6 +33,7 @@ from typing import Any
 
 from collector import _configure_chain_ssl, load_json, NETWORK
 from config import DATA_DIR
+from taostats_v1 import PATH_SUBNET_METRICS
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ U64_MAX = 2 ** 64                       # TaoWeight normalisation
 U16_MAX = 65535                         # SubnetOwnerCut normalisation
 U64F64_SCALE = 2 ** 64                  # v440 gate hyperparams (q, h, theta)
 SUBNET_DAILY_STORE = DATA_DIR / "subnet_daily.json"  # Taostats incentive_burn lives here
-SUBNET_LATEST_PATH = "/api/subnet/latest/v1"          # live fallback for incentive_burn
+SUBNET_LATEST_PATH = PATH_SUBNET_METRICS            # live fallback for incentive_burn
 MINER_BURNED_SCALE = 2 ** 32     # MinerBurned fixed-point: bits / 2**32 -> fraction [0,1]
 
 

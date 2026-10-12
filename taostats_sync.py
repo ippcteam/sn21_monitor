@@ -1,8 +1,9 @@
 """
 Fetch owner coldkey transfer history from Taostats API (source of truth for on-chain TAO flows).
 
-Docs: https://docs.taostats.io/reference/get-transfers
-GET https://api.taostats.io/api/transfer/v1 — filter by `address` (SS58), `network=finney`, paginate.
+GET https://api.taostats.io/v1/transfers — filter by `address` (SS58), `network=finney`, paginate.
+GET https://api.taostats.io/v1/accounts/{address} — latest balance. The address is a path segment.
+GET https://api.taostats.io/v1/price?asset=tao — TAO/USD spot.
 
 Note: Taostats “account /transactions” UI may list extrinsics beyond TAO transfers; this endpoint
 covers documented coldkey transfers. Extend with additional API paths if you need full parity.
@@ -21,13 +22,20 @@ import requests
 
 from collector import save_json
 from config import DATA_DIR
+from taostats_v1 import (
+    PATH_PRICE,
+    PATH_TRANSFERS,
+    account_path,
+    legacy_account_ss58,
+    ss58,
+    transfer_params,
+)
 
 logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-TRANSFER_PATH = "/api/transfer/v1"
-ACCOUNT_LATEST_PATH = "/api/account/latest/v1"
-PRICE_LATEST_PATH = "/api/price/latest/v1"
+TRANSFER_PATH = PATH_TRANSFERS
+PRICE_LATEST_PATH = PATH_PRICE
 TAOSTATS_STORE = DATA_DIR / "taostats_owner_transfers.json"
 
 # All Bittensor balances are denominated in rao (10^-9 TAO).
@@ -110,6 +118,8 @@ def fetch_owner_balance(address: str, network: str = "finney") -> dict[str, Any]
     """
     Latest on-chain balance snapshot for `address` from Taostats.
 
+    The address is the path segment of `/v1/accounts/{address}`. `network` is
+    recorded on the returned snapshot and is not sent as a query parameter.
     Bittensor balances live in rao (1 TAO = 10^9 rao). This returns a normalised
     dict in TAO units plus per-subnet alpha holdings.
     """
@@ -118,11 +128,7 @@ def fetch_owner_balance(address: str, network: str = "finney") -> dict[str, Any]
     session = requests.Session()
     session.headers.update(_headers())
     try:
-        body = _get_json(
-            session,
-            {"address": address, "network": network},
-            path=ACCOUNT_LATEST_PATH,
-        )
+        body = _get_json(session, {}, path=account_path(address))
     except Exception as e:
         logger.warning("Taostats balance fetch failed for %s: %s", address[:12] + "…", e)
         return None
@@ -135,13 +141,13 @@ def fetch_owner_balance(address: str, network: str = "finney") -> dict[str, Any]
         alpha_breakdown.append(
             {
                 "netuid": ab.get("netuid"),
-                "hotkey": ab.get("hotkey"),
+                "hotkey": ss58(ab.get("hotkey")),
                 "alpha": _rao_to_tao(ab.get("balance")),
                 "alpha_as_tao": _rao_to_tao(ab.get("balance_as_tao")),
             }
         )
     return {
-        "address": (row.get("address") or {}).get("ss58") or address,
+        "address": legacy_account_ss58(row, address),
         "network": network,
         "block_number": row.get("block_number"),
         "timestamp": row.get("timestamp"),
@@ -202,12 +208,7 @@ def fetch_all_transfers(
     session = requests.Session()
     session.headers.update(_headers())
 
-    base: dict[str, Any] = {
-        "network": network,
-        "address": address,
-        "limit": limit,
-        "order": "timestamp_desc",
-    }
+    base = transfer_params(address, network=network, limit=limit)
     rows, last_pag = _fetch_pages_for_params(session, base)
 
     # Optional: merge `from` and `to` queries (extra API calls). Enable if `address` misses rows.

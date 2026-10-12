@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from validator_basket_sync import (
     OUR_VALIDATOR_HOTKEY,
+    _fetch_available,
     annotate,
     build_snapshot,
     diff_baskets,
@@ -35,6 +36,43 @@ def test_parse_available_row_reads_address_ss58_and_rao():
     assert row["name"] == "Rizzo"
     assert row["is_named"] is True
     assert row["alpha"] == 1.5
+
+
+def test_parse_available_row_reads_a_string_address():
+    row = parse_available_row({
+        "address": RIZZO,
+        "name": "Rizzo",
+        "netuid": 21,
+        "hotkey_alpha": "1500000000",
+    })
+    assert row["hotkey"] == RIZZO
+    assert row["alpha"] == 1.5
+
+
+def test_fetch_available_sends_only_netuid():
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"address": RIZZO, "name": "Rizzo", "hotkey_alpha": "1", "netuid": 21}]}
+
+        def raise_for_status(self):
+            return None
+
+    class _Session:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None, timeout=None):
+            self.calls.append((url, params))
+            return _Response()
+
+    session = _Session()
+    rows = _fetch_available(session)
+    assert len(session.calls) == 1
+    assert session.calls[0][0].endswith("/v1/validators/active")
+    assert session.calls[0][1] == {"netuid": 21}
+    assert rows[0]["address"] == RIZZO
 
 
 def test_parse_blank_name_is_unnamed():

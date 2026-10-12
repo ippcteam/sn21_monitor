@@ -2,6 +2,16 @@
 
 All notable changes to the SN21 Monitor. Newest first.
 
+## 2026-10-12 — Taostats `/v1` API
+
+### Changed
+- Taostats reads use `/v1/` ahead of the 9 November 2026 shutdown of `/api/`.
+  Stored dashboard fields keep their names. Pool volume and subnet settings
+  are joined from the split routes. Subnet net flow is no longer served and
+  is saved as null. Metagraph `daily_reward` is `emission * 20`, which matched
+  the old field on five SN21 UIDs. Bot watch was already on
+  `/v1/subnets/stake-events`.
+
 ## 2026-08-30 — Dashboard load fix
 
 ### Fixed

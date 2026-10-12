@@ -39,6 +39,7 @@ import requests
 from collector import load_json, save_json, _configure_chain_ssl
 from config import DATA_DIR
 from labels import house_set, is_house
+from taostats_v1 import PATH_ALPHA_LEADERBOARD, leaderboard_params
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ COS_SIMILAR = 0.85
 
 # Taostats name enrichment.
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-STAKE_BALANCE_PATH = "/api/dtao/stake_balance/latest/v1"
+STAKE_BALANCE_PATH = PATH_ALPHA_LEADERBOARD
 NAME_TTL_SECONDS = 7 * 24 * 3600
 NAME_MISS_TTL_SECONDS = 24 * 3600  # retry nameless/transient-miss hotkeys sooner
 NAME_FETCH_SLEEP = 1.5
@@ -119,9 +120,9 @@ def _load_names() -> dict[str, Any]:
 
 
 def _fetch_hotkey_name(session: requests.Session, hotkey: str) -> str | None:
-    """One Taostats stake_balance read for a hotkey → its operator name."""
+    """One Taostats alpha-leaderboard read for a hotkey → its operator name."""
     url = f"{TAOSTATS_API_BASE}{STAKE_BALANCE_PATH}"
-    params = {"netuid": NETUID, "hotkey": hotkey, "limit": 1, "order": "balance_desc"}
+    params = leaderboard_params(netuid=NETUID, hotkey=hotkey, limit=1)
     for attempt in range(MAX_429_RETRIES):
         r = session.get(url, params=params, timeout=60)
         if r.status_code == 429:
@@ -478,7 +479,7 @@ def our_validator_wallets(hotkey: str | None = None) -> dict[str, Any]:
     page = 1
     while True:
         url = f"{TAOSTATS_API_BASE}{STAKE_BALANCE_PATH}"
-        params = {"netuid": NETUID, "hotkey": hk, "limit": 200, "page": page, "order": "balance_desc"}
+        params = leaderboard_params(netuid=NETUID, hotkey=hk, limit=200, page=page)
         for attempt in range(MAX_429_RETRIES):
             r = session.get(url, params=params, timeout=120)
             if r.status_code == 429:

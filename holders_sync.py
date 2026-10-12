@@ -1,7 +1,7 @@
 """
 SN21 holder snapshot + 24h movement diff.
 
-Source: GET /api/dtao/stake_balance/latest/v1?netuid=21 (paginated, 200 per page).
+Source: GET /v1/alpha/leaderboard?netuid=21 (paginated, 200 per page).
 At time of build there are ~1,971 (hotkey × coldkey) staking positions on SN21.
 
 Storage: data/holders_snapshots.json keeps the last N daily snapshots:
@@ -24,11 +24,12 @@ import requests
 from collector import save_json, load_json
 from config import DATA_DIR
 from labels import house_set, is_house
+from taostats_v1 import PATH_ALPHA_LEADERBOARD, leaderboard_params
 
 logger = logging.getLogger(__name__)
 
 TAOSTATS_API_BASE = os.environ.get("TAOSTATS_API_BASE", "https://api.taostats.io").rstrip("/")
-STAKE_BALANCE_LATEST_PATH = "/api/dtao/stake_balance/latest/v1"
+STAKE_BALANCE_LATEST_PATH = PATH_ALPHA_LEADERBOARD
 NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 200
@@ -86,7 +87,7 @@ def _fetch_page(session: requests.Session, page: int) -> dict[str, Any]:
     8 retries, well within the daily window.
     """
     url = f"{TAOSTATS_API_BASE}{STAKE_BALANCE_LATEST_PATH}"
-    params = {"netuid": NETUID, "limit": PAGE_SIZE, "page": page, "order": "balance_desc"}
+    params = leaderboard_params(netuid=NETUID, limit=PAGE_SIZE, page=page)
     for attempt in range(MAX_429_RETRIES):
         r = session.get(url, params=params, timeout=120)
         if r.status_code == 429:
