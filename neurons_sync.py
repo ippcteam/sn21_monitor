@@ -39,7 +39,9 @@ NETUID = 21
 RAO_PER_TAO = 1_000_000_000
 PAGE_SIZE = 100
 CACHE_TTL_SECONDS = 60
-MAX_429_RETRIES = 5
+# Match subnet_sync. A 5-try budget tops out at a 16s wait, and page 2 of the
+# metagraph was still 429 after that. The 7th try is the one that waits 30s.
+MAX_429_RETRIES = 7
 
 _cache_lock = threading.Lock()
 _cache: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
