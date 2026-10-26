@@ -240,3 +240,68 @@ def test_s7_retention_one_matches_s6_no_dump_ex_entry():
     r6 = next(r for r in s6["table"] if r["b"] == 0.0)
     r7 = next(r for r in s7["table"] if r["b"] == 0.0)
     assert r7["d90_vs_hold_pct"] == pytest.approx(r6["d90_vs_hold_pct"], abs=0.05)
+
+
+# ── Etao #3264: intra-subnet split, cross-subnet share unchanged ─────────────
+def test_etao_default_vector_matches_finney_seed():
+    """The seeded owner/validator/miner parts are the ones SN21 holds on spec 481."""
+    from lab.mechanisms.emission_weights_v481_3264 import ONE, default_weights
+
+    weights = default_weights(11796)
+    assert weights == (
+        0,
+        0,
+        3320329489486196244,
+        7563207292111677685,
+        7563207292111677686,
+    )
+    assert sum(weights) == ONE
+
+
+def test_etao_share_matches_live_gate():
+    """#3264 does not touch get_shares, so it scores exactly as the live gate."""
+    s = _state()
+    live = M.get(M.LIVE_VERSION)
+    etao = M.get("emission_weights_v481_3264")
+    assert M.emission_share(etao, s) == pytest.approx(M.emission_share(live, s))
+
+
+def test_etao_corners_obey_the_v1_rules_and_keep_root_whole():
+    from lab.mechanisms.emission_weights_v481_3264 import corners
+
+    s = _state()
+    s["root_tao"] = 5_400_000.0
+    s["owner_cut"] = 11796 / 65535
+    rows = corners(s, leased=False)
+    assert rows[0]["name"].startswith("hold")
+    assert rows[0]["legal"]
+    assert rows[0]["owner"] == pytest.approx(0.18, abs=1e-4)
+    assert rows[0]["miner"] == pytest.approx(0.41, abs=1e-3)
+    r = rows[0]["baseline_root_share"]
+    assert 0 < r < 0.41
+    for row in rows:
+        assert row["legal"], row["name"]
+        assert row["owner"] <= 0.33 + 1e-12
+        assert row["validator"] <= 0.50 + 1e-12
+        assert row["miner"] >= 0.33 - 1e-12
+        assert row["root"] == pytest.approx(r)
+        assert abs(row["owner"] + row["validator"] + row["miner"] - 1.0) < 1e-12
+    max_owner = next(r for r in rows if r["name"] == "max owner, miner slot held")
+    assert max_owner["owner"] == pytest.approx(0.33, abs=1e-4)
+    assert max_owner["miner"] == pytest.approx(rows[0]["miner"])
+    assert max_owner["owner_alpha_day"] > rows[0]["owner_alpha_day"]
+    maximised = next(r for r in rows if r["name"] == "owner at floor, miner maximised")
+    assert maximised["owner"] == 0.0
+    assert maximised["miner"] > rows[0]["miner"]
+
+
+def test_etao_rejects_a_validator_slot_that_would_zero_root():
+    from lab.mechanisms.emission_weights_v481_3264 import ONE, legal
+
+    # Root's baseline is 40% of emission. A 26% validator slot is below it,
+    # so the chain rejects the set (validators would receive nothing).
+    owner = (ONE * 33) // 100
+    validator = (ONE * 26) // 100
+    miner = ONE - owner - validator
+    assert miner >= (ONE * 33) // 100
+    assert not legal((0, 0, owner, validator, miner), root_parts=(ONE * 40) // 100)

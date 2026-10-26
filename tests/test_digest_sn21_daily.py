@@ -110,6 +110,88 @@ def test_flags_fire_on_burn_move_and_sn21_specific():
     assert not any("off full burn-to-owner" in f for f in flags)
 
 
+def _sunday_log(buys: list[tuple[str, float]]) -> list[dict]:
+    return [{
+        "date": day,
+        "pool": {
+            "tao_buy_volume_24h": buy,
+            "tao_sell_volume_24h": buy,
+            "buys_24h": 20,
+            "sells_24h": 20,
+        },
+    } for day, buy in buys]
+
+
+def test_typical_sunday_volume_is_not_a_dryup():
+    """251 τ is a normal Sunday. −49% vs a busy prior Sunday is not an alarm."""
+    log = _sunday_log([
+        ("2026-08-30", 278),
+        ("2026-09-06", 102),
+        ("2026-09-13", 72),
+        ("2026-09-20", 51),
+        ("2026-09-27", 90),
+        ("2026-10-04", 200),
+        ("2026-10-11", 400),
+        ("2026-10-18", 491),
+        ("2026-10-25", 251),
+    ])
+    tape = src._tape_section(log, {"tao_buy_volume_24h": {"7d_pct": -48.9}})
+    assert tape["buy_volume_vs_weekday"] == "typical"
+    assert tape["buy_volume_weekday"] == "Sunday"
+    assert "typical Sunday" in tape["volume_context_plain"]
+    owner = {"entitled_7d_pct": 0.0, "burn_rate_pct": 45.12,
+             "burn_vs_setpoint_pp": 0.02, "burn_7d_pp": 0.0}
+    flags = src._flags({}, {"available": False}, owner, None, tape)
+    assert flags == []
+
+
+def test_thin_sunday_volume_still_flags():
+    log = _sunday_log([
+        ("2026-08-30", 250),
+        ("2026-09-06", 240),
+        ("2026-09-13", 260),
+        ("2026-09-20", 230),
+        ("2026-09-27", 270),
+        ("2026-10-04", 255),
+        ("2026-10-11", 245),
+        ("2026-10-18", 250),
+        ("2026-10-25", 40),
+    ])
+    tape = src._tape_section(log, {"tao_buy_volume_24h": {"7d_pct": -84.0}})
+    assert tape["buy_volume_vs_weekday"] == "thin"
+    owner = {"entitled_7d_pct": 0.0, "burn_rate_pct": 45.12,
+             "burn_vs_setpoint_pp": 0.02, "burn_7d_pp": 0.0}
+    flags = src._flags({}, {"available": False}, owner, None, tape)
+    assert any("Buy volume thin for a Sunday" in f for f in flags)
+    assert not any("dry-up" in f for f in flags)
+
+
+def test_fallback_states_typical_volume_without_alarm():
+    text = fallback_compose({
+        "date": "2026-10-25",
+        "tape": {
+            "available": True,
+            "sentiment_index": 48,
+            "sentiment_label": "Neutral",
+            "buys_24h": 28,
+            "sells_24h": 30,
+            "buyers_24h": 20,
+            "sellers_24h": 22,
+            "tao_buy_volume_24h": 250.78,
+            "tao_sell_volume_24h": 247.38,
+            "net_tao_24h": 3.4,
+            "tao_buy_volume_7d_pct": -48.9,
+            "buy_volume_vs_weekday": "typical",
+            "volume_context_plain": "Buy volume 251 τ, in line with a typical Sunday (median 190 τ).",
+            "verdict_plain": "Tape roughly balanced.",
+        },
+        "flags": [],
+    }, "SN21 Daily")
+    assert "typical Sunday" in text
+    assert "dry-up" not in text.lower()
+    assert "crash" not in text.lower()
+
+
 def test_flags_tape_extremes():
     owner = {"entitled_7d_pct": 0.0, "burn_rate_pct": 45.12,
              "burn_vs_setpoint_pp": 0.02, "burn_7d_pp": 0.0}

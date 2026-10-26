@@ -21,7 +21,8 @@ Multi-window output:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import statistics
+from datetime import date, datetime, timezone
 from typing import Any
 
 from collector import load_json
@@ -93,6 +94,15 @@ SENTIMENT_EXTREME_LOW = 25
 SENTIMENT_EXTREME_HIGH = 75
 SENTIMENT_SWING_7D = 15
 VOLUME_DRYUP_7D_PCT = -40.0
+# Same-weekday baseline. The 7d percent compares this 08:30 UTC snapshot with
+# the same weekday last week, so a normal Saturday session prints as a "crash"
+# whenever the prior Saturday was busy. Alarm only when today is thin versus
+# recent same-weekday readings.
+WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+WEEKDAY_LOOKBACK = 8
+WEEKDAY_BASELINE_MIN = 4
+WEEKDAY_THIN_RATIO = 0.50
+WEEKDAY_HEAVY_RATIO = 2.0
 
 
 def _pct(today: float | int | None, prior: float | int | None) -> float | None:
@@ -872,6 +882,73 @@ def _owner_economics_section(emissions: dict, owner: dict, burn: dict,
 
 # ── 24h AMM tape (Taostats pool: sentiment + buy/sell counts + τ volume) ─────
 
+def _buy_volume_weekday(subnet_log: list[dict]) -> dict[str, Any]:
+    """Today's buy volume against the median of recent same-weekday snapshots.
+
+    Returns `buy_volume_vs_weekday` of typical / thin / heavy / unknown.
+    Unknown (fewer than four prior same weekdays) leaves the 7d dry-up rule
+    in place. Otherwise the level, not the week-over-week percent, is the signal.
+    """
+    unknown: dict[str, Any] = {
+        "buy_volume_weekday": None,
+        "buy_volume_weekday_n": 0,
+        "buy_volume_weekday_median": None,
+        "buy_volume_weekday_ratio": None,
+        "buy_volume_vs_weekday": "unknown",
+        "volume_context_plain": None,
+    }
+    if not subnet_log:
+        return unknown
+    today = subnet_log[-1] or {}
+    today_date = today.get("date")
+    buy = ((today.get("pool") or {}).get("tao_buy_volume_24h"))
+    if not today_date or buy is None:
+        return unknown
+    try:
+        weekday = date.fromisoformat(str(today_date)[:10]).weekday()
+        buy_f = float(buy)
+    except (TypeError, ValueError):
+        return unknown
+
+    prior: list[float] = []
+    for row in subnet_log[:-1]:
+        if not row or str(row.get("date") or "")[:10] == str(today_date)[:10]:
+            continue
+        raw = ((row.get("pool") or {}).get("tao_buy_volume_24h"))
+        try:
+            if date.fromisoformat(str(row.get("date"))[:10]).weekday() != weekday:
+                continue
+            prior.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    prior = prior[-WEEKDAY_LOOKBACK:]
+    name = WEEKDAY_NAMES[weekday]
+    base = {**unknown, "buy_volume_weekday": name, "buy_volume_weekday_n": len(prior)}
+    if len(prior) < WEEKDAY_BASELINE_MIN:
+        return base
+    med = statistics.median(prior)
+    if med <= 0:
+        return base
+    ratio = buy_f / med
+    if ratio < WEEKDAY_THIN_RATIO:
+        vs = "thin"
+        plain = f"Buy volume {buy_f:.0f} τ, thin for a {name} (typical {med:.0f} τ)."
+    elif ratio > WEEKDAY_HEAVY_RATIO:
+        vs = "heavy"
+        plain = f"Buy volume {buy_f:.0f} τ, heavy for a {name} (typical {med:.0f} τ)."
+    else:
+        vs = "typical"
+        plain = f"Buy volume {buy_f:.0f} τ, in line with a typical {name} (median {med:.0f} τ)."
+    return {
+        "buy_volume_weekday": name,
+        "buy_volume_weekday_n": len(prior),
+        "buy_volume_weekday_median": round(med, 2),
+        "buy_volume_weekday_ratio": round(ratio, 2),
+        "buy_volume_vs_weekday": vs,
+        "volume_context_plain": plain,
+    }
+
+
 def _tape_section(subnet_log: list[dict], trends: dict) -> dict[str, Any]:
     """
     Daily pulse from the pool row already written at 08:30. Pre-computes a
@@ -959,6 +1036,7 @@ def _tape_section(subnet_log: list[dict], trends: dict) -> dict[str, Any]:
         "verdict": verdict,
         "verdict_plain": plain,
         "count_vs_volume": count_vs_volume,
+        **_buy_volume_weekday(subnet_log),
     }
 
 
@@ -1024,9 +1102,26 @@ def _flags(price: dict, flows: dict, owner_econ: dict,
         sent_7d = tape.get("sentiment_7d_delta")
         if sent_7d is not None and abs(float(sent_7d)) >= SENTIMENT_SWING_7D:
             flags.append(f"Sentiment swung {float(sent_7d):+.0f} over 7d")
-        buy_7d = tape.get("tao_buy_volume_7d_pct")
-        if buy_7d is not None and float(buy_7d) <= VOLUME_DRYUP_7D_PCT:
-            flags.append(f"Buy volume dry-up: {float(buy_7d):.0f}% over 7d")
+        # Week-over-week percent alone false-alarms on a normal weekend: Sunday's
+        # reading is Saturday's session, and it often sits far below a busy prior
+        # Sunday while matching the Sunday median. Once we have a same-weekday
+        # baseline, only a thin day for that weekday is an alarm.
+        vs_weekday = tape.get("buy_volume_vs_weekday") or "unknown"
+        if vs_weekday == "thin":
+            day = tape.get("buy_volume_weekday") or "weekday"
+            today_v = tape.get("tao_buy_volume_24h")
+            med = tape.get("buy_volume_weekday_median")
+            if today_v is not None and med:
+                flags.append(
+                    f"Buy volume thin for a {day}: {float(today_v):.0f} τ "
+                    f"vs {float(med):.0f} τ typical"
+                )
+            else:
+                flags.append(f"Buy volume thin for a {day}")
+        elif vs_weekday == "unknown":
+            buy_7d = tape.get("tao_buy_volume_7d_pct")
+            if buy_7d is not None and float(buy_7d) <= VOLUME_DRYUP_7D_PCT:
+                flags.append(f"Buy volume dry-up: {float(buy_7d):.0f}% over 7d")
 
     if flows.get("available"):
         h_net = flows.get("house_net_alpha_24h")

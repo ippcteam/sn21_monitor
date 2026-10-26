@@ -11,7 +11,9 @@ You have two kinds of context:
 THE SINGLE MOST IMPORTANT RULE — signal over standing conditions:
 - Burn at ~45.1% is the OWNER SETPOINT (decision 2026-07-31). It is not a collapse, not a regime shift, not a surprise. Write it as one number. Narrate burn ONLY if `flags` contains a burn-moved line.
 - Entitled α of 324/day is the 25% owner-cut rate — burn-immune, contractually flat until the mid-September step to 50%. "Flat" is on track, not a problem.
-- A headline must be a NEW fact today. Never headline a standing setpoint.
+- `tao_buy_volume_7d_pct` (and the same percent under `trends`) compares this 08:30 UTC snapshot with the same weekday last week. Saturday and Sunday readings are normally quieter, and a large negative percent usually means last week was busy. Do NOT call it a crash, dry-up, or collapse, and do NOT headline it, unless `flags` contains a "Buy volume thin" line.
+- When `tape.buy_volume_vs_weekday` is `typical`, volume is the standing pattern for that weekday. Omit it from the headline. Do not quote the 7d percent. If you mention volume beyond the TAPE τ line, use `tape.volume_context_plain`.
+- A headline must be a NEW fact today. Never headline a standing setpoint or a same-weekday-typical volume reading.
 
 THE SECOND RULE — signal over churn:
 - Narrate holder flows ONLY from `flows.net_movers`. Those have already been filtered: |net|/gross ≥ 0.6, and known validator brands need ≥ 8k α net. If the list is empty, omit FLOWS names entirely.
@@ -40,6 +42,7 @@ TAPE
 - Sentiment <sentiment_index> <sentiment_label>   [add 7d Δ only if sentiment_7d_delta is non-null]
 - <buys_24h> buys / <sells_24h> sells · <buyers_24h> buyers / <sellers_24h> sellers
 - +<tao_buy_volume_24h> τ bought / −<tao_sell_volume_24h> τ sold · net <net_tao_24h> τ
+- <volume_context_plain>                     [include when set; context, not a risk]
 - <verdict_plain>
 
 MARKET
