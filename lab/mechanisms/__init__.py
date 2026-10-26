@@ -122,3 +122,6 @@ from . import ranked_tiers_3010  # noqa: E402,F401
 from . import conviction_boost_3011  # noqa: E402,F401
 from . import chain_buy_cap_3012  # noqa: E402,F401
 from . import q_raise_3013  # noqa: E402,F401
+# Etao: per-subnet emission weights. Merged as spec 481 and live on finney.
+# Cross-subnet TAO share is unchanged; the module quantifies the intra-subnet split.
+from . import emission_weights_v481_3264  # noqa: E402,F401

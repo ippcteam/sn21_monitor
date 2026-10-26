@@ -107,6 +107,8 @@ def compose(inputs: dict[str, Any], title: str,
             f"  +{_fmt_num(tape.get('tao_buy_volume_24h'), 2)} τ bought / "
             f"−{_fmt_num(tape.get('tao_sell_volume_24h'), 2)} τ sold · net {net_s} τ"
         )
+        if tape.get("volume_context_plain"):
+            lines.append(f"  {tape['volume_context_plain']}")
         if tape.get("verdict_plain"):
             lines.append(f"  {tape['verdict_plain']}")
 
